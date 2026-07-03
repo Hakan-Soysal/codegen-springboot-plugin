@@ -1,20 +1,20 @@
 package techgen.core.gm;
 
-/**
- * T2.2 (TestPlanBuilder) YER TUTUCUSU — GEÇİCİ boş record.
- *
- * <p><b>Karar (T2.1 kapsamında):</b> davranış sözleşmesi §6 / {@code tasks/T2-2-testplan.md}
- * TestPlan IR'ını (processTests/orphanFlowTests/orphanOpTests + ProcessTest/ScenarioTest/
- * PrereqStep/PrereqKind) tanımlar; bu task (T2.1) yalnız {@link techgen.core.gm.GenerationModel}
- * derlenebilsin diye BOŞ bir yer tutucu tip ekler. T2.2 bu dosyayı GERÇEK IR ile
- * DEĞİŞTİRECEK/GENİŞLETECEKTİR. {@link techgen.core.pipeline.GmBuilder}, T2.2 gelene kadar
- * {@code testPlan} alanını {@link #empty()} ile doldurur (gerçek {@code TestPlanBuilder.build(...)}
- * çağrısı T2.2'nin işidir).</p>
- */
-public record TestPlan() {
+import java.util.List;
 
-    /** Boş test planı — T2.2 gelene kadar {@link techgen.core.pipeline.GmBuilder} bunu kullanır. */
+/**
+ * Deterministik test IR (davranış sözleşmesi §6, CoreTemplate1 {@code Gm/TestPlan.cs} karşılığı).
+ * Tüm listeler ordinal-sıralı ({@link techgen.core.pipeline.TestPlanBuilder} tarafından üretilir).
+ *
+ * <p>Üç test türü: containment (process→flow→op) testleri + iki orphan (flow/op) senaryo türü.</p>
+ */
+public record TestPlan(
+        List<ProcessTest> processTests,
+        List<ScenarioTest> orphanFlowTests,
+        List<ScenarioTest> orphanOpTests) {
+
+    /** Boş test planı — contract/processes/flows eksikse (standalone/eski) {@link techgen.core.pipeline.TestPlanBuilder} bunu döner. */
     public static TestPlan empty() {
-        return new TestPlan();
+        return new TestPlan(List.of(), List.of(), List.of());
     }
 }

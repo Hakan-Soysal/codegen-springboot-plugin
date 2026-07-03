@@ -10,7 +10,6 @@ import java.util.Set;
 import techgen.core.errors.JoinError;
 import techgen.core.gm.GenerationModel;
 import techgen.core.gm.GmOperation;
-import techgen.core.gm.TestPlan;
 import techgen.core.gm.TypeEnv;
 import techgen.core.model.CallEdgeJson;
 import techgen.core.model.ContractFile;
@@ -25,9 +24,8 @@ import techgen.core.model.SubscriptionJson;
  * Aşama 2+3 (Join &amp; Validate → Generation Model). Hedef-bağımsız
  * (davranış sözleşmesi §5, CoreTemplate1 {@code Pipeline/GmBuilder.cs} karşılığı).
  *
- * <p>Not (T2.1 → T2.2 seam): {@link GenerationModel#testPlan()} bu sınıfta HENÜZ
- * {@link TestPlan#empty()} ile doldurulur — gerçek {@code TestPlanBuilder.build(contract,
- * m.operations())} çağrısı T2.2'nin işidir (bkz. {@code tasks/T2-2-testplan.md}).</p>
+ * <p>{@link GenerationModel#testPlan()} {@link TestPlanBuilder#build(ContractFile, java.util.List)}
+ * gerçek sonucuyla doldurulur (davranış sözleşmesi §6, {@code tasks/T2-2-testplan.md}).</p>
  */
 public final class GmBuilder {
 
@@ -112,7 +110,7 @@ public final class GmBuilder {
                 m.deployables().stream().sorted(Comparator.comparing(techgen.core.model.Deployable::name)).toList(),
                 m.uncharted().stream().sorted(Comparator.comparing(techgen.core.model.UnchartedJson::name)).toList(),
                 env,
-                TestPlan.empty());
+                TestPlanBuilder.build(contract, m.operations()));
     }
 
     private static GmOperation buildOp(OperationJson o, boolean linked, Map<String, ContractOp> contractOps) {
