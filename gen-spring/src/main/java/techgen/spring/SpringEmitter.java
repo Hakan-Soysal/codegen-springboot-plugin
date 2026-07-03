@@ -5,16 +5,27 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import techgen.core.errors.UnsupportedConstruct;
 import techgen.core.gm.GenerationModel;
+import techgen.core.gm.GmOperation;
+import techgen.core.model.Abac;
 import techgen.core.model.EntityFieldJson;
 import techgen.core.model.EntityJson;
 import techgen.core.model.ErrorJson;
 import techgen.core.model.EventJson;
+import techgen.core.model.ExprNode;
 import techgen.core.model.ExtJson;
 import techgen.core.model.FieldJson;
+import techgen.core.model.GuardedExpr;
 import techgen.core.model.ModuleDecl;
+import techgen.core.model.OperationJson;
 import techgen.core.model.TypeJson;
+import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
+
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.function.Function;
 
 /**
  * gen-spring emisyon orkestrasyonu (davranış sözleşmesi §6.1-6.2; referans
@@ -98,7 +109,7 @@ public final class SpringEmitter {
                 writer.writeAlways("gen/java/app/" + pkg + "/" + event.id() + ".java", eventJava(event, report));
             }
 
-            // ── Entities → @Entity + JpaRepository (T3.4 §5.1-5.2) ──
+            // ── Entities → @Entity + JpaRepository (T3.4 §5.1-5.2) + Invariants (T3.5 §5.3) ──
             for (EntityJson entity : gm.entities()) {
                 if (!entity.module().equals(module.name())) {
                     continue;
@@ -106,6 +117,24 @@ public final class SpringEmitter {
                 writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + ".java", entityJava(entity, report));
                 writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + "Repository.java",
                         repositoryJava(entity));
+
+                // ── Invariants (T3.5 §5.3) — invariants varsa {Entity}Invariants.java ──
+                String invariants = invariantsJava(entity, gm, report);
+                if (invariants != null) {
+                    writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + "Invariants.java", invariants);
+                }
+            }
+
+            // ── Guards (T3.5 §5.2) — validation/rule/permit varsa {op}/{Op}Guards.java ──
+            for (GmOperation op : gm.operations()) {
+                if (!op.module().equals(module.name())) {
+                    continue;
+                }
+                String guards = guardsJava(op, gm, report);
+                if (guards != null) {
+                    String slice = op.id().toLowerCase(java.util.Locale.ROOT);
+                    writer.writeAlways("gen/java/app/" + pkg + "/" + slice + "/" + op.id() + "Guards.java", guards);
+                }
             }
         }
 
@@ -756,6 +785,259 @@ public final class SpringEmitter {
                 public interface %sRepository extends JpaRepository<%s, String> {
                 }
                 """.formatted(Naming.packageOf(entity.module()), entity.id(), entity.id());
+    }
+
+    // ── Guards + Invariants (T3.5 §5.2-5.3; SPEC §6.5; referans §1 `:1216-1319`, §7 validation/rule/
+    // permit/guardRef/invariant satırları). Tipli predicate (INV-4, dynamic YOK); render stratejisi
+    // {@link JavaPredicateRenderer}, dil-nötr yürüyüş gen-core {@code ExprWalk}. ──
+
+    /** validation/rule/permit varsa {@code {Op}Guards.java}; hiçbiri yoksa null (dosya emit edilmez). */
+    private static String guardsJava(GmOperation op, GenerationModel gm, BuildReport report) {
+        OperationJson o = op.op();
+        List<GuardedExpr> validation = o.validation();
+        List<GuardedExpr> rule = o.rule();
+        Abac abac = o.abac();
+        if (validation.isEmpty() && rule.isEmpty() && abac == null) {
+            return null;
+        }
+
+        Function<List<String>, String> resolveType = p -> gm.env().resolvePath(gm, p, op.id(), null);
+        List<String> methods = new ArrayList<>();
+        List<String> records = new ArrayList<>();
+        ImportFlags imports = new ImportFlags();
+        boolean anyGuardRef = false;
+
+        int validationOk = 0;
+        for (int i = 0; i < validation.size(); i++) {
+            GuardedExpr g = validation.get(i);
+            anyGuardRef |= g.guardRef() != null;
+            if (predicate(op.id(), "Validation", i, g, resolveType, gm, report, methods, records, imports)) {
+                validationOk++;
+            }
+        }
+        int ruleOk = 0;
+        for (int i = 0; i < rule.size(); i++) {
+            GuardedExpr g = rule.get(i);
+            anyGuardRef |= g.guardRef() != null;
+            if (predicate(op.id(), "Rule", i, g, resolveType, gm, report, methods, records, imports)) {
+                ruleOk++;
+            }
+        }
+        int permitOk = 0;
+        if (abac != null) {
+            GuardedExpr permitExpr = new GuardedExpr("permit when <expr>", abac.permit(), null);
+            if (predicate(op.id(), "Permit", 0, permitExpr, resolveType, gm, report, methods, records, imports)) {
+                permitOk++;
+            }
+        }
+
+        if (validationOk > 0) {
+            report.realized("validation", op.id());
+        }
+        if (ruleOk > 0) {
+            report.realized("rule", op.id());
+        }
+        if (permitOk > 0) {
+            report.realized("permit", op.id());
+        }
+        if (anyGuardRef) {
+            report.realized("guardRef", op.id());
+            report.policy("guard-linkage", "build-time coverage link; emitted as comment (generator-policy)");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(Naming.slicePackage(op.module(), op.id())).append(";\n\n");
+        sb.append(imports.render());
+        sb.append("// validation→NotValid(400) · rule→NotProcessable(422) · permit→authz. Tipli predicate\n");
+        sb.append("// (dynamic YOK); input record manifest tiplerinden — çözülemeyen alan tipli seam (inferred).\n");
+        sb.append("public final class ").append(op.id()).append("Guards {\n\n");
+        sb.append("    private ").append(op.id()).append("Guards() {\n    }\n\n");
+        for (String m : methods) {
+            sb.append(m);
+        }
+        for (String r : records) {
+            sb.append(r);
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /** invariants varsa {@code {Entity}Invariants.java}; yoksa null. Metot alanları doğrudan entity-field tipli (task §5.3). */
+    private static String invariantsJava(EntityJson entity, GenerationModel gm, BuildReport report) {
+        List<GuardedExpr> invariants = entity.invariants();
+        if (invariants.isEmpty()) {
+            return null;
+        }
+        Function<List<String>, String> resolveType = p -> gm.env().resolvePath(gm, p, null, entity.id());
+        List<String> methods = new ArrayList<>();
+        ImportFlags imports = new ImportFlags();
+        boolean anyGuardRef = false;
+        int ok = 0;
+        for (int i = 0; i < invariants.size(); i++) {
+            GuardedExpr g = invariants.get(i);
+            anyGuardRef |= g.guardRef() != null;
+            if (invariant(entity.id(), i, g, resolveType, report, methods, imports)) {
+                ok++;
+            }
+        }
+        if (ok > 0) {
+            report.realized("invariant", entity.id());
+        }
+        if (anyGuardRef) {
+            report.realized("guardRef", entity.id());
+            report.policy("guard-linkage", "build-time coverage link; emitted as comment (generator-policy)");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.").append(Naming.packageOf(entity.module())).append(";\n\n");
+        sb.append(imports.render());
+        sb.append("// entity invariant'ları (kalıcı veri-bütünlüğü). Tipli predicate; alanlar entity-field tiplerinden.\n");
+        sb.append("public final class ").append(entity.id()).append("Invariants {\n\n");
+        sb.append("    private ").append(entity.id()).append("Invariants() {\n    }\n\n");
+        for (String m : methods) {
+            sb.append(m);
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Bir guard predicate'ini render eder → method + input record'u {@code methods}/{@code records}'a
+     * ekler. Başarılıysa true; {@link UnsupportedConstruct}'ta {@code report.unsupported} yazar +
+     * throw-stub method ekler (sessizlik YOK) ve false döner.
+     */
+    private static boolean predicate(String opId, String kind, int i, GuardedExpr g,
+            Function<List<String>, String> resolveType, GenerationModel gm, BuildReport report,
+            List<String> methods, List<String> records, ImportFlags imports) {
+        String guardComment = "";
+        if (g.guardRef() != null) {
+            guardComment = "    // guardRef: " + g.guardRef() + " (build-time kapsama bağı)\n";
+        }
+        String inputName = opId + kind + i + "Input";
+        try {
+            ExprWalk.Result<String> res = JavaPredicateRenderer.render(g.ast(), resolveType);
+            Map<String, String> hints = ExprWalk.inferLiteralTypes(g.ast());
+            List<String> fields = new ArrayList<>();
+            for (List<String> path : res.paths()) {
+                String type = JavaPredicateRenderer.javaFieldType(path, resolveType, hints);
+                imports.note(type);
+                fields.add(type + " " + ExprWalk.propName(path));
+            }
+            imports.noteExpr(res.expr());
+            methods.add(guardComment
+                    + "    public static boolean " + methodName(kind, i) + "(" + inputName + " input) {\n"
+                    + "        return " + res.expr() + ";\n"
+                    + "    }\n\n");
+            records.add("    public record " + inputName + "(" + String.join(", ", fields) + ") {\n    }\n\n");
+            return true;
+        } catch (UnsupportedConstruct e) {
+            report.unsupported(kind.toLowerCase(java.util.Locale.ROOT), opId + "#" + kind + i, e.getMessage());
+            methods.add(guardComment
+                    + "    public static boolean " + methodName(kind, i) + "() {\n"
+                    + "        throw new UnsupportedOperationException(\"unsupported: "
+                    + escapeJava(g.text()) + "\");\n"
+                    + "    }\n\n");
+            return false;
+        }
+    }
+
+    /**
+     * Bir invariant predicate'ini render eder (bare parametre biçimi — input record YOK, task §5.3).
+     * Başarılıysa true; {@link UnsupportedConstruct}'ta unsupported + throw-stub + false.
+     */
+    private static boolean invariant(String entityId, int i, GuardedExpr g,
+            Function<List<String>, String> resolveType, BuildReport report,
+            List<String> methods, ImportFlags imports) {
+        String guardComment = "";
+        if (g.guardRef() != null) {
+            guardComment = "    // guardRef: " + g.guardRef() + " (build-time kapsama bağı)\n";
+        }
+        try {
+            ExprWalk.Result<String> res = JavaPredicateRenderer.render(g.ast(), resolveType, false);
+            Map<String, String> hints = ExprWalk.inferLiteralTypes(g.ast());
+            List<String> params = new ArrayList<>();
+            for (List<String> path : res.paths()) {
+                String type = JavaPredicateRenderer.javaFieldType(path, resolveType, hints);
+                imports.note(type);
+                params.add(type + " " + ExprWalk.propName(path));
+            }
+            imports.noteExpr(res.expr());
+            methods.add(guardComment
+                    + "    public static boolean invariant" + i + "(" + String.join(", ", params) + ") {\n"
+                    + "        return " + res.expr() + ";\n"
+                    + "    }\n\n");
+            return true;
+        } catch (UnsupportedConstruct e) {
+            report.unsupported("invariant", entityId + "#Invariant" + i, e.getMessage());
+            methods.add(guardComment
+                    + "    public static boolean invariant" + i + "() {\n"
+                    + "        throw new UnsupportedOperationException(\"unsupported: "
+                    + escapeJava(g.text()) + "\");\n"
+                    + "    }\n\n");
+            return false;
+        }
+    }
+
+    /** Guards metot adı: validation0.. / rule0.. / permit0 (camelCase, SPEC §6.4). */
+    private static String methodName(String kind, int i) {
+        return Naming.camel(kind) + i;
+    }
+
+    private static String escapeJava(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /** Predicate dosyalarının gereken java.* import'larını (deterministik sabit sıra) biriktirir. */
+    private static final class ImportFlags {
+        private boolean bigDecimal;
+        private boolean instant;
+        private boolean localDate;
+        private boolean duration;
+        private boolean list;
+
+        void note(String javaType) {
+            switch (javaType) {
+                case "BigDecimal" -> bigDecimal = true;
+                case "Instant" -> instant = true;
+                case "LocalDate" -> localDate = true;
+                case "Duration" -> duration = true;
+                default -> {
+                    if (javaType.startsWith("List<")) {
+                        list = true;
+                    }
+                }
+            }
+        }
+
+        /** Literal render'ında ({@code new BigDecimal("...")}) BigDecimal geçebilir; expr üzerinden yakala. */
+        void noteExpr(String expr) {
+            if (expr.contains("new BigDecimal(")) {
+                bigDecimal = true;
+            }
+        }
+
+        String render() {
+            StringBuilder sb = new StringBuilder();
+            if (bigDecimal) {
+                sb.append("import java.math.BigDecimal;\n");
+            }
+            if (instant) {
+                sb.append("import java.time.Instant;\n");
+            }
+            if (localDate) {
+                sb.append("import java.time.LocalDate;\n");
+            }
+            if (duration) {
+                sb.append("import java.time.Duration;\n");
+            }
+            if (list) {
+                sb.append("import java.util.List;\n");
+            }
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            return sb.toString();
+        }
     }
 
     // ── PersistenceConfig (root, T3.4 §5.2; entities>0) — açık @EnableJpaRepositories/@EntityScan
