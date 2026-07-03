@@ -13,7 +13,22 @@
   <artifactId>conformance</artifactId>
   <packaging>jar</packaging>
 
+  <!-- Hafif çekirdek (T8.1 §5.1): spring-context + spring-beans (Spring Boot starter DEĞİL — app
+       classpath'i JPA/web autoconfig sınıflarını runner'ın izole child classloader'ından sağlar).
+       Sürümler kök pom'daki spring-boot-dependencies BOM import'undan gelir (root pom.xml notu). -->
   <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-beans</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
