@@ -5,6 +5,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import techgen.core.errors.UnsupportedConstruct;
 import techgen.core.gm.GenerationModel;
 import techgen.core.gm.GmOperation;
@@ -166,9 +168,9 @@ public final class SpringEmitter {
                 writer.writeAlways(genSliceDir + "/" + reqName + ".java",
                         requestRecordJava(op, gm, slicePkg, reqName, report));
 
-                // Step 5.2 — HandlerBase (abstract, gen-owned).
+                // Step 5.2 — HandlerBase (abstract, gen-owned) + T3.7 Auth/Throws/Consistency/Ext.
                 writer.writeAlways(genSliceDir + "/" + opId + "HandlerBase.java",
-                        handlerBaseJava(op, gm, slicePkg, reqName, retType, deps));
+                        handlerBaseJava(op, gm, slicePkg, reqName, retType, deps, report));
 
                 // Step 5.3 — human seam (writeIfAbsent); brownfield migrasyon önce.
                 Path oldFlat = outDir.resolve("src/main/java/app/" + pkg + "/" + opId + "Handler.java");
@@ -663,13 +665,15 @@ public final class SpringEmitter {
     /**
      * Step 5.2 — HandlerBase (Generation Gap, gen-owned, abstract): DI alanları (repository'ler) +
      * ctor + gövdesiz {@code execute}. Guards çağrı sırası (skill canonicalOrder, SPEC §6.3/§10)
-     * yalnız Javadoc referansı — çağrı T3.6 dışı.
+     * yalnız Javadoc referansı — çağrı T3.6 dışı. T3.7 tamamlayıcı bölümler ekler: Auth (roles/
+     * scopes/ownership), Throws (THROWABLE_ERRORS + tipli fabrikalar), Consistency, Ext.
      */
     private static String handlerBaseJava(GmOperation op, GenerationModel gm, String slicePkg, String reqName,
-            String retType, List<RepoDep> deps) {
+            String retType, List<RepoDep> deps, BuildReport report) {
         String opId = op.id();
+        OperationJson o = op.op();
         StringBuilder imports = new StringBuilder("import app.Result;\n");
-        String retImport = customTypeImport(op.op().signature().returns(), gm);
+        String retImport = customTypeImport(o.signature().returns(), gm);
         imports.append(repoImportsBlock(deps));
         if (retImport != null) {
             imports.append(retImport);
@@ -686,13 +690,38 @@ public final class SpringEmitter {
                     .append(";\n");
         }
 
+        // T3.7 — Auth (roles/scopes/ownership varsa).
+        String authSection = authFields(o, opId, report);
+
+        // T3.7 — Throws (op.throws() varsa): THROWABLE_ERRORS + tipli fabrikalar.
+        ThrowsBlock throwsBlock = throwsBlock(op, gm, retType, report);
+
+        // T3.7 — Consistency (mode≠null || risk==eventual).
+        String consistencySection = consistencyFields(o, opId, report);
+
+        // T3.7 — Ext (op.ext() varsa): prelude + tanınan sabitler + (@http varsa) http-binding policy.
+        String extSection = extFields(op, report);
+
+        // T3.7 ek importları — ordinal-sorted (TreeSet), dedup (aynı Result alt-tipi birden fazla throws'ta olabilir).
+        Set<String> extraImports = new TreeSet<>();
+        if (!authSection.isEmpty()) {
+            extraImports.add("import java.util.List;\n");
+        }
+        if (throwsBlock != null) {
+            extraImports.addAll(throwsBlock.imports());
+        }
+        for (String imp : extraImports) {
+            imports.append(imp);
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(slicePkg).append(";\n\n");
         sb.append(imports);
         sb.append('\n');
         sb.append("/**\n");
-        sb.append(" * Generation Gap taban sınıf (abstract; SPEC §6.2) — DI alanları burada; sonraki\n");
-        sb.append(" * task'lar (idempotency/authz/external/event/vb.) kendi bölümlerini ekler.\n");
+        sb.append(" * Generation Gap taban sınıf (abstract; SPEC §6.2) — DI alanları + Auth/Throws/\n");
+        sb.append(" * Consistency/Ext bölümleri burada (T3.7); sonraki task'lar (idempotency/pagination/\n");
+        sb.append(" * external/event/vb.) kendi bölümlerini ekler.\n");
         sb.append(" * Guard çağrı sırası kanonik (skill canonicalOrder, çağrı T3.6 dışı — yalnız referans):\n");
         sb.append(" * idempotency -&gt; authz -&gt; validation -&gt; external-input -&gt; rule -&gt;\n");
         sb.append(" * entity+invariant -&gt; persist -&gt; emit -&gt; return.\n");
@@ -702,14 +731,249 @@ public final class SpringEmitter {
         if (!deps.isEmpty()) {
             sb.append('\n');
         }
+        sb.append(authSection);
+        if (throwsBlock != null) {
+            sb.append(throwsBlock.fieldSection());
+        }
+        sb.append(consistencySection);
+        sb.append(extSection);
         sb.append("    protected ").append(opId).append("HandlerBase(").append(String.join(", ", ctorParams))
                 .append(") {\n");
         sb.append(ctorAssigns);
         sb.append("    }\n\n");
+        if (throwsBlock != null) {
+            sb.append(throwsBlock.methodsSection());
+        }
         sb.append("    public abstract Result<").append(retType).append("> execute(").append(reqName)
                 .append(" request);\n");
         sb.append("}\n");
         return sb.toString();
+    }
+
+    // ── T3.7 — HandlerBase tamamlayıcıları: Auth / Throws / Consistency / Ext (SPEC §6.3; referans
+    // §1 `:1401-1427`/`:844-873`/`:887-910`/`:1142-1177` + §7). Java'da partial class yok — .NET'te
+    // ayrı `.g.cs` dosyaları olan bu bölümler burada aynı {@code {Op}HandlerBase} gövdesine EKLENİR.
+    // `note` realized T3.6 Step 5.1'de yapılır; BURADA TEKRAR EDİLMEZ (çift entry olmasın). ──
+
+    /**
+     * Auth bölümü (referans §1 `:1401-1427`) — roles/scopes/ownership'ten HERHANGİ biri varsa
+     * ÜÇÜ BİRDEN emit edilir (boş liste/{@code null} olsa da). {@code report.realized} her biri
+     * için BAĞIMSIZ koşulludur (yalnız o alan doluysa).
+     */
+    private static String authFields(OperationJson o, String opId, BuildReport report) {
+        if (o.roles().isEmpty() && o.scopes().isEmpty() && o.ownership() == null) {
+            return "";
+        }
+        if (!o.roles().isEmpty()) {
+            report.realized("roles", opId);
+        }
+        if (!o.scopes().isEmpty()) {
+            report.realized("scopes", opId);
+        }
+        if (o.ownership() != null) {
+            report.realized("ownership", opId);
+        }
+        String roles = o.roles().stream().map(r -> "\"" + escapeJava(r) + "\"").collect(Collectors.joining(", "));
+        String scopes = o.scopes().stream().map(s -> "\"" + escapeJava(s) + "\"").collect(Collectors.joining(", "));
+        String ownership = o.ownership() == null ? "null" : "\"" + escapeJava(o.ownership()) + "\"";
+        StringBuilder sb = new StringBuilder();
+        sb.append("    // authz iskeleti (roles+scopes AND, ownership row-level). ponytail: meta + seam;\n");
+        sb.append("    // gerçek claim/row-level kontrol insan/runtime.\n");
+        sb.append("    public static final List<String> REQUIRED_ROLES = List.of(").append(roles).append(");\n");
+        sb.append("    public static final List<String> REQUIRED_SCOPES = List.of(").append(scopes).append(");\n");
+        sb.append("    public static final String OWNERSHIP = ").append(ownership).append(";\n\n");
+        return sb.toString();
+    }
+
+    /** Throws bölümü sonucu — alan (array) + fabrika metotları + gereken ek importlar (T3.7). */
+    private record ThrowsBlock(String fieldSection, String methodsSection, Set<String> imports) {
+    }
+
+    /** {@code op.throws()} boşsa null (dosyaya bölüm eklenmez). */
+    private static ThrowsBlock throwsBlock(GmOperation op, GenerationModel gm, String retType, BuildReport report) {
+        List<String> ids = op.op().throwsList();
+        if (ids.isEmpty()) {
+            return null;
+        }
+        String module = op.module();
+        List<String> consts = new ArrayList<>();
+        List<String> factories = new ArrayList<>();
+        Set<String> imports = new TreeSet<>();
+        for (String id : ids) {
+            report.realized("throws", op.id() + "->" + id);
+            ErrorJson err = findError(gm, id);
+            String errModule = err != null ? err.module() : module;
+            String resultType = err != null ? err.resultType() : "NotProcessable";
+            String codeRef;
+            if (errModule.equals(module)) {
+                codeRef = "Errors." + id;
+                imports.add("import app." + Naming.packageOf(module) + ".Errors;\n");
+            } else {
+                codeRef = "app." + Naming.packageOf(errModule) + ".Errors." + id;
+            }
+            consts.add(codeRef);
+            imports.add(throwFactoryImport(resultType));
+            if ("NotValid".equals(resultType)) {
+                imports.add("import java.util.Map;\n");
+            }
+            factories.add(throwFactoryMethod(resultType, retType, Naming.camel(id), codeRef));
+        }
+        String field = "    // throws: op'un atabileceği adlı-hatalar -> tipli Result fabrikaları (iş gövdesi çağırır).\n"
+                + "    public static final String[] THROWABLE_ERRORS = {" + String.join(", ", consts) + "};\n\n";
+        return new ThrowsBlock(field, String.join("", factories), imports);
+    }
+
+    /** {@code gm.errors()} içinde id eşleşmesi; bulunamazsa null (tanınmayan → NotProcessable varsayımı). */
+    private static ErrorJson findError(GenerationModel gm, String id) {
+        for (ErrorJson e : gm.errors()) {
+            if (e.id().equals(id)) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** resultType → gereken {@code app.*} Result alt-tip importu (referans §1 Result taksonomisi). */
+    private static String throwFactoryImport(String resultType) {
+        return switch (resultType) {
+            case "NotValid" -> "import app.NotValid;\n";
+            case "NotAuthorized" -> "import app.NotAuthorized;\n";
+            case "NotAuthenticated" -> "import app.NotAuthenticated;\n";
+            case "ServerError" -> "import app.ServerError;\n";
+            default -> "import app.NotProcessable;\n";
+        };
+    }
+
+    /**
+     * resultType → Result alt-tipi fabrikası (referans §1 `:876-883` birebir): NotValid→Map param,
+     * NotAuthorized/NotAuthenticated/ServerError→String param, tanınmayan→{@code NotProcessable(codeRef, message)}.
+     * Fabrika adı camelCase error id (SPEC §6.4 üye adlandırma).
+     */
+    private static String throwFactoryMethod(String resultType, String retType, String factoryName, String codeRef) {
+        return switch (resultType) {
+            case "NotValid" -> "    public static Result<" + retType + "> " + factoryName
+                    + "(Map<String, String> errors) {\n        return new NotValid<>(errors);\n    }\n\n";
+            case "NotAuthorized" -> "    public static Result<" + retType + "> " + factoryName
+                    + "(String reason) {\n        return new NotAuthorized<>(reason);\n    }\n\n";
+            case "NotAuthenticated" -> "    public static Result<" + retType + "> " + factoryName
+                    + "(String reason) {\n        return new NotAuthenticated<>(reason);\n    }\n\n";
+            case "ServerError" -> "    public static Result<" + retType + "> " + factoryName
+                    + "(String message) {\n        return new ServerError<>(message);\n    }\n\n";
+            default -> "    public static Result<" + retType + "> " + factoryName
+                    + "(String message) {\n        return new NotProcessable<>(" + codeRef + ", message);\n    }\n\n";
+        };
+    }
+
+    /**
+     * Consistency bölümü (referans §1 `:887-910`) — yalnız {@code mode≠null VEYA risk==eventual}
+     * (Census ile aynı koşul). eventual → outbox seçim-iskeleti yorumu; aksi halde in-proc tx yorumu.
+     */
+    private static String consistencyFields(OperationJson o, String opId, BuildReport report) {
+        var c = o.consistency();
+        if (c == null || (c.mode() == null && !"eventual".equals(c.risk()))) {
+            return "";
+        }
+        report.realized("consistency", opId);
+        String mode = c.mode() == null ? "default" : c.mode();
+        report.policy("consistency-mode", c.risk() + "/" + mode + " (generator-policy)");
+        String modeLiteral = c.mode() == null ? "null" : "\"" + escapeJava(c.mode()) + "\"";
+        String strategyComment = "eventual".equals(c.risk())
+                ? "outbox seçim-iskeleti: write + outbox-kaydı TEK tx; ayrı dispatcher publish eder. "
+                        + "Taşıma/retry = §8 policy."
+                : "in-proc transaction (" + c.risk() + "): persist ambient tx içinde. mode = ek garanti yorumu.";
+        StringBuilder sb = new StringBuilder();
+        sb.append("    // consistency: ").append(c.risk()).append(" (mode: ").append(mode).append(") -> ")
+                .append(strategyComment).append('\n');
+        sb.append("    public static final String CONSISTENCY_RISK = \"").append(escapeJava(c.risk()))
+                .append("\";\n");
+        sb.append("    public static final String CONSISTENCY_MODE = ").append(modeLiteral).append(";\n\n");
+        return sb.toString();
+    }
+
+    /**
+     * Ext bölümü (referans §1 `:1142-1177`) — {@code op.ext()} varsa TÜM ns'ler için prelude yorumu +
+     * {@code realized}/{@code {ns}-realization} policy (.NET {@code ExtPartial} birebir — trigger ns
+     * dahil TÜM ext'ler burada realize edilir). Tanınan ns'ler ek sabit üretir: {@code @audit.*}→
+     * {@code AUDIT_CATEGORY}, {@code @metric.*}→{@code METRIC_NAME}, {@code @http.*}→
+     * {@code HTTP_ROUTE}/{@code HTTP_METHOD}/{@code HTTP_QUERY}/{@code HTTP_HEADER} + AYRICA
+     * {@code policy("http-binding", ...)} (.NET {@code DotnetEmitter.cs:1160} paritesi).
+     */
+    private static String extFields(GmOperation op, BuildReport report) {
+        List<ExtJson> ext = op.op().ext();
+        if (ext == null || ext.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("    // passthrough prelude'lar (core yorumlamaz; hedef-özel realizasyon = §8 policy).\n");
+        for (ExtJson e : ext) {
+            report.realized("@" + e.ns() + "." + e.name(), op.id());
+            report.policy(e.ns() + "-realization", "annotation/interceptor (generator-policy)");
+            String argsStr = e.args().entrySet().stream()
+                    .map(en -> en.getKey() + "=" + jsonNodeDisplay(en.getValue()))
+                    .collect(Collectors.joining(", "));
+            sb.append("    // @").append(e.ns()).append('.').append(e.name()).append('(').append(argsStr)
+                    .append(")\n");
+        }
+        ExtJson audit = findExt(ext, "audit");
+        ExtJson metric = findExt(ext, "metric");
+        ExtJson http = findExt(ext, "http");
+        if (audit != null && audit.args().containsKey("category")) {
+            sb.append("    public static final String AUDIT_CATEGORY = ")
+                    .append(jsonStrLiteral(audit.args().get("category"))).append(";\n");
+        }
+        if (metric != null && metric.args().containsKey("name")) {
+            sb.append("    public static final String METRIC_NAME = ")
+                    .append(jsonStrLiteral(metric.args().get("name"))).append(";\n");
+        }
+        if (http != null) {
+            // @http ns'li op ext AYRICA http-binding policy'si alır (.NET DotnetEmitter.cs:1160 ExtPartial paritesi).
+            report.policy("http-binding", "route/query/header detail (generator-policy)");
+            if (http.args().containsKey("route")) {
+                sb.append("    public static final String HTTP_ROUTE = ")
+                        .append(jsonStrLiteral(http.args().get("route"))).append(";\n");
+            }
+            if (http.args().containsKey("method")) {
+                sb.append("    public static final String HTTP_METHOD = ")
+                        .append(jsonStrLiteral(http.args().get("method"))).append(";\n");
+            }
+            if (http.args().containsKey("query")) {
+                sb.append("    public static final String HTTP_QUERY = ")
+                        .append(jsonStrLiteral(http.args().get("query"))).append(";\n");
+            }
+            if (http.args().containsKey("header")) {
+                sb.append("    public static final String HTTP_HEADER = ")
+                        .append(jsonStrLiteral(http.args().get("header"))).append(";\n");
+            }
+        }
+        sb.append('\n');
+        return sb.toString();
+    }
+
+    /** {@code ext} listesinde ilk {@code ns} eşleşmesi; yoksa null. */
+    private static ExtJson findExt(List<ExtJson> ext, String ns) {
+        for (ExtJson e : ext) {
+            if (e.ns().equals(ns)) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** Prelude yorumunda arg değeri (unquoted; .NET {@code JsonElement.ToString()} paritesi). */
+    private static String jsonNodeDisplay(JsonNode n) {
+        return n.isTextual() ? n.asText() : n.toString();
+    }
+
+    /**
+     * Tanınan ext sabitleri için Java string-literal (her zaman {@code String} alana atanabilir —
+     * .NET {@code JsonStr} paritesi genişletilmiş: sayısal/boolean JSON değerleri de tırnaklanır,
+     * .NET'in aksine — Java'da {@code String} alana sayısal literal atanamaz; bkz. task raporu notu).
+     */
+    private static String jsonStrLiteral(JsonNode n) {
+        if (n == null) {
+            return "null";
+        }
+        return "\"" + escapeJava(n.asText()) + "\"";
     }
 
     /**
