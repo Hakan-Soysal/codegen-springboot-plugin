@@ -242,17 +242,76 @@ class SpecRunnerTest {
         assertEquals(SpecStatus.SKIPPED, result.status());
     }
 
+    // ── invariant property dalı (T8.2; referans SpecRunner.cs:91-121) ──
+
+    record MoneyRequest(BigDecimal amount) {
+    }
+
+    record Money(BigDecimal balance) {
+    }
+
+    record InvariantSuccess(Money value) {
+    }
+
+    static final class InvariantHandler {
+        private final java.util.function.Function<BigDecimal, BigDecimal> balanceFn;
+
+        InvariantHandler(java.util.function.Function<BigDecimal, BigDecimal> balanceFn) {
+            this.balanceFn = balanceFn;
+        }
+
+        public Object execute(MoneyRequest req) {
+            return new InvariantSuccess(new Money(balanceFn.apply(req.amount())));
+        }
+    }
+
     @Test
-    void run_invariantSpec_returnsSkipped_iskeletNotu() throws Exception {
+    void run_invariantSpec_missingFieldOpOrBound_returnsSkipped() throws Exception {
         Spec spec = SpecJson.parse("""
-                {"construct":"invariant","opId":"FakeOp","arrange":{"kind":"property"},
-                 "act":{"call":"FakeOp","with":{"name":"x"}},
-                 "assert":{"field":"balance","op":">=","bound":0}}
+                {"construct":"invariant","opId":"Invariant","arrange":{"kind":"property"},
+                 "act":{"call":"Invariant","with":{"amount":10}},
+                 "assert":{}}
                 """);
-        try (GeneratedApp app = fakeApp("fakeOpHandler", new FakeOpHandler())) {
+        try (GeneratedApp app = fakeApp("fakeOpHandler", new InvariantHandler(a -> a))) {
             SpecResult result = new SpecRunner().run(spec, app);
             assertEquals(SpecStatus.SKIPPED, result.status());
-            assertTrue(result.detail().contains("T8.2"));
+            assertTrue(result.detail().contains("field/op/bound"));
+        }
+    }
+
+    @Test
+    void run_invariantSpec_holdsForAllRounds_returnsPass_deterministically() throws Exception {
+        Spec spec = SpecJson.parse("""
+                {"construct":"invariant","opId":"Invariant","arrange":{"kind":"property"},
+                 "act":{"call":"Invariant","with":{"amount":10}},
+                 "assert":{"field":"balance","op":">=","bound":0}}
+                """);
+        SpecResult first;
+        try (GeneratedApp app = fakeApp("fakeOpHandler", new InvariantHandler(a -> a))) {
+            first = new SpecRunner().run(spec, app);
+        }
+        SpecResult second;
+        try (GeneratedApp app = fakeApp("fakeOpHandler", new InvariantHandler(a -> a))) {
+            second = new SpecRunner().run(spec, app);
+        }
+        assertEquals(SpecStatus.PASS, first.status(), first.detail());
+        assertTrue(first.detail().contains("50 property"));
+        assertEquals(first.detail(), second.detail(), "aynı seed → aynı sonuç (deterministik)");
+    }
+
+    @Test
+    void run_invariantSpec_violatesBound_returnsFail_withFirstCounterexample() throws Exception {
+        Spec spec = SpecJson.parse("""
+                {"construct":"invariant","opId":"Invariant","arrange":{"kind":"property"},
+                 "act":{"call":"Invariant","with":{"amount":10}},
+                 "assert":{"field":"balance","op":">=","bound":0}}
+                """);
+        try (GeneratedApp app = fakeApp("fakeOpHandler",
+                new InvariantHandler(a -> a.subtract(new BigDecimal("500"))))) {
+            SpecResult result = new SpecRunner().run(spec, app);
+            assertEquals(SpecStatus.FAIL, result.status());
+            assertTrue(result.detail().contains("invariant ihlali"));
+            assertTrue(result.detail().contains("karşı-örnek"));
         }
     }
 

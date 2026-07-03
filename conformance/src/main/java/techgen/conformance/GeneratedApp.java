@@ -13,6 +13,8 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.support.AbstractApplicationContext;
+import org.springframework.context.support.DefaultLifecycleProcessor;
 import org.springframework.core.env.MapPropertySource;
 
 /**
@@ -64,34 +66,82 @@ public final class GeneratedApp implements AutoCloseable {
      * izole {@link java.net.URLClassLoader} (parent = bu sınıfın classloader'ı) → app'in
      * {@code app.GeneratedBootstrap} sınıfı → H2 in-memory datasource property'leri (benzersiz
      * ad) programatik environment'a eklenir → JPA autoconfig + bootstrap register → refresh.
+     *
+     * <p><b>Thread context classloader (T8.2 düzeltmesi):</b> Spring'in {@code ConditionEvaluator}'ı
+     * ({@code @ConditionalOnClass} vb. çözümü) kullandığı classloader'ı {@code ConditionContextImpl}
+     * final alanında bir KEZ — {@code AnnotationConfigApplicationContext}'in KURUCUSU sırasında
+     * (yani {@code ctx.setClassLoader(...)} çağrısından ÖNCE!) — TCCL'den ({@code Thread.
+     * currentThread().getContextClassLoader()}) hesaplayıp CACHE'ler; sonraki {@code
+     * ctx.setClassLoader(...)}/{@code beanFactory.setBeanClassLoader(...)} çağrıları bu cache'i
+     * DEĞİŞTİRMEZ. Bu yüzden TCCL, context'in KURUCUSUNDAN ÖNCE izole child classloader'a
+     * ayarlanmalıdır — aksi halde runner'ın (maven-surefire/shaded-jar) süreç classloader'ı
+     * cache'lenir ve app'in kendi classpath'indeki autoconfig sınıfları ({@code
+     * spring-boot-autoconfigure}) çözülemez. finally'de eski TCCL geri yüklenir (runner'ın kendi
+     * thread'i kirletilmez).</p>
      */
     public static GeneratedApp load(String appClasspath) throws Exception {
         URLClassLoaderHandle cl = URLClassLoaderHandle.of(appClasspath);
-        Class<?> bootstrapClass = Class.forName("app.GeneratedBootstrap", true, cl.classLoader());
 
-        AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
-        ctx.setClassLoader(cl.classLoader());
+        Thread currentThread = Thread.currentThread();
+        ClassLoader previousTccl = currentThread.getContextClassLoader();
+        currentThread.setContextClassLoader(cl.classLoader());
+        try {
+            Class<?> bootstrapClass = Class.forName("app.GeneratedBootstrap", true, cl.classLoader());
 
-        String dbName = "conformance" + UUID.randomUUID().toString().replace("-", "");
-        Map<String, Object> h2Props = new LinkedHashMap<>();
-        h2Props.put("spring.datasource.url", "jdbc:h2:mem:" + dbName + ";DB_CLOSE_DELAY=-1");
-        h2Props.put("spring.datasource.driver-class-name", "org.h2.Driver");
-        h2Props.put("spring.datasource.username", "sa");
-        h2Props.put("spring.datasource.password", "");
-        h2Props.put("spring.jpa.hibernate.ddl-auto", "update");
-        ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("conformance-h2", h2Props));
+            AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
+            ctx.setClassLoader(cl.classLoader());
+            ctx.getBeanFactory().setBeanClassLoader(cl.classLoader());
 
-        for (String autoconfigClassName : JPA_AUTOCONFIG_CLASSES) {
-            try {
-                ctx.register(Class.forName(autoconfigClassName, true, cl.classLoader()));
-            } catch (ClassNotFoundException notPresent) {
-                // app classpath'inde bu autoconfig yok — seam (bu app'in build zinciri farklı
-                // kurulmuş olabilir); sessizce atlanır, entity'siz app'ler için zararsızdır.
+            String dbName = "conformance" + UUID.randomUUID().toString().replace("-", "");
+            Map<String, Object> h2Props = new LinkedHashMap<>();
+            h2Props.put("spring.datasource.url", "jdbc:h2:mem:" + dbName + ";DB_CLOSE_DELAY=-1");
+            h2Props.put("spring.datasource.driver-class-name", "org.h2.Driver");
+            h2Props.put("spring.datasource.username", "sa");
+            h2Props.put("spring.datasource.password", "");
+            h2Props.put("spring.jpa.hibernate.ddl-auto", "update");
+            ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("conformance-h2", h2Props));
+
+            // SmartLifecycle otomatik-başlatma DEVRE DIŞI (Java eşlemesi — davranış sözleşmesi §A.3
+            // "GeneratedApp.cs"; .NET tarafı DI container'ı KURAR ama IHostedService.StartAsync'i
+            // ÇAĞIRMAZ — hosted-service başlatma ayrı bir host-runtime kararıdır, DI kurulumundan
+            // AYRIK). Spring'in AnnotationConfigApplicationContext#refresh() ise varsayılan olarak
+            // TÜM SmartLifecycle bean'lerini (örn. @trigger.cron -> {Op}CronTrigger) otomatik
+            // başlatır; bu, test edilen op'tan tamamen bağımsız BAŞKA bir op'un doldurulmamış
+            // seam'i (scheduled trigger) context boot'unu kırar. Runner yalnız handler.execute()
+            // üzerinden test eder — background scheduler/trigger çalıştırmaz; bu yüzden lifecycle
+            // işlemcisi no-op ile değiştirilir (refresh() ÖNCESİ, singleton olarak register edilir).
+            ctx.getBeanFactory().registerSingleton(AbstractApplicationContext.LIFECYCLE_PROCESSOR_BEAN_NAME,
+                    new DefaultLifecycleProcessor() {
+                        // registerSingleton normal bean yaşam-döngüsünü (Aware callback'leri dahil)
+                        // ATLAR — setBeanFactory hiç çağrılmaz. onClose() ise gen-owned
+                        // DefaultLifecycleProcessor.getBeanFactory() üzerinden BeanFactory bekler;
+                        // bu yüzden onRefresh() + onClose() İKİSİ de no-op'tur (start/stop hiç
+                        // tetiklenmediğinden zaten stopBeans() işi de yoktur).
+                        @Override
+                        public void onRefresh() {
+                            // kasıtlı no-op — bkz. yukarıdaki açıklama.
+                        }
+
+                        @Override
+                        public void onClose() {
+                            // kasıtlı no-op — bkz. yukarıdaki açıklama.
+                        }
+                    });
+
+            for (String autoconfigClassName : JPA_AUTOCONFIG_CLASSES) {
+                try {
+                    ctx.register(Class.forName(autoconfigClassName, true, cl.classLoader()));
+                } catch (ClassNotFoundException notPresent) {
+                    // app classpath'inde bu autoconfig yok — seam (bu app'in build zinciri farklı
+                    // kurulmuş olabilir); sessizce atlanır, entity'siz app'ler için zararsızdır.
+                }
             }
+            ctx.register(bootstrapClass);
+            ctx.refresh();
+            return new GeneratedApp(cl, ctx);
+        } finally {
+            currentThread.setContextClassLoader(previousTccl);
         }
-        ctx.register(bootstrapClass);
-        ctx.refresh();
-        return new GeneratedApp(cl, ctx);
     }
 
     /**
