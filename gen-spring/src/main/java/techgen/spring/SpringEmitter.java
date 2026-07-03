@@ -10,6 +10,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import techgen.core.errors.UnsupportedConstruct;
 import techgen.core.gm.GenerationModel;
 import techgen.core.gm.GmOperation;
+import techgen.core.gm.PrereqKind;
+import techgen.core.gm.PrereqStep;
+import techgen.core.gm.ProcessTest;
+import techgen.core.gm.ScenarioTest;
 import techgen.core.model.Abac;
 import techgen.core.model.BoundaryOpJson;
 import techgen.core.model.CallEdgeJson;
@@ -37,6 +41,7 @@ import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
@@ -376,6 +381,14 @@ public final class SpringEmitter {
             }
             writer.writeAlways("gen/java/app/Subscriptions.java", subscriptionsRootJava(gm));
         }
+
+        // ── T7.1 — Fixture harness (owned test execution harness; her run yenilenir) + TestPlan→JUnit
+        // emisyonu (gen/test-java owned iskelet + src/test/java ARRANGE human seam; SPEC §6.3 tests
+        // satırı; referans §1 Fixture/TestSkeleton/TestArrangeSeam; anti-circularity: ASSERT owned
+        // kalır, ARRANGE insan-seam'de). Single-dışı (Ambiguous/Missing) prereq'li testler emit
+        // EDİLMEZ → Unsupported("test-prereq", ...) (T2.2 kuralının emisyon yüzü). ──
+        writer.writeAlways("gen/test-java/app/Fixture.java", fixtureJava(config));
+        emitTests(gm, writer, report);
 
         writer.finishAndPrune();
     }
@@ -2889,6 +2902,384 @@ public final class SpringEmitter {
         }
         sb.append("// uncharted owned POJO (").append(u.name()).append('.').append(t.id()).append(").\n");
         sb.append("public record ").append(clsName).append('(').append(components).append(") {\n}\n");
+        return sb.toString();
+    }
+
+    // ── T7.1 — Fixture harness (owned; gen/test-java/app/Fixture.java) — Spring context bootstrap
+    // (GeneratedBootstrap @Import edilir — entities>0 ise bu zaten PersistenceConfig'i transitif
+    // @Import eder) + H2 in-memory override (db adı runtime'da benzersiz; emit metni deterministik).
+    // @SpringBootTest KULLANILMAZ (anti-pattern §8) — hafif bootstrap (WebApplicationType.NONE). ──
+
+    private static String fixtureJava(GenConfig config) {
+        String provider = config == null ? null : config.testDbProvider();
+        String urlExpr = switch (provider == null ? "" : provider) {
+            case "postgres" ->
+                "System.getenv().getOrDefault(\"TEST_DB\", \"jdbc:postgresql://localhost:5432/apptest\")";
+            case "sqlserver" -> "System.getenv().getOrDefault(\"TEST_DB\", "
+                    + "\"jdbc:sqlserver://localhost:1433;databaseName=apptest\")";
+            default -> "\"jdbc:h2:mem:\" + java.util.UUID.randomUUID()";
+        };
+        return """
+                package app;
+
+                import java.lang.reflect.Constructor;
+                import java.lang.reflect.Method;
+                import java.util.Map;
+
+                import jakarta.persistence.EntityManager;
+                import jakarta.persistence.EntityManagerFactory;
+                import org.springframework.boot.WebApplicationType;
+                import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+                import org.springframework.boot.builder.SpringApplicationBuilder;
+                import org.springframework.context.ConfigurableApplicationContext;
+                import org.springframework.context.annotation.Configuration;
+                import org.springframework.context.annotation.Import;
+
+                /**
+                 * Owned test-execution harness (T7.1; üreteç-sahibi, her run yenilenir). ASSERT/ARRANGE
+                 * TAŞIMAZ (bunlar owned test-iskeletinde / human ARRANGE seam'inde, T7.1 Step 5.2/5.3).
+                 * {@code @SpringBootTest} KULLANILMAZ (hız + web-siz, anti-pattern §8) — hafif bootstrap:
+                 * GeneratedBootstrap @Import edilir (entities&gt;0 ise PersistenceConfig'i transitif
+                 * @Import eder), web katmanı YOK ({@code WebApplicationType.NONE}). Test DB: H2 in-memory
+                 * (db adı runtime'da benzersiz — emit metni deterministik) veya testDbProvider=postgres/
+                 * sqlserver ise env {@code TEST_DB} bağlantısı (CoreTemplate1 Fixture paritesi).
+                 */
+                public final class Fixture {
+
+                    @Configuration
+                    @EnableAutoConfiguration
+                    @Import(GeneratedBootstrap.class)
+                    static class Boot {
+                    }
+
+                    private ConfigurableApplicationContext context;
+
+                    public Fixture() {
+                        reset();
+                    }
+
+                    /** İzole/sıfırlanmış state: yeni context + yeni (runtime-benzersiz) test veritabanı. */
+                    public void reset() {
+                        if (context != null) {
+                            context.close();
+                        }
+                        context = new SpringApplicationBuilder(Boot.class)
+                                .web(WebApplicationType.NONE)
+                                .properties(Map.of("spring.datasource.url", %s))
+                                .run();
+                    }
+
+                    /**
+                     * Handler bean resolve (reflection) + {@code execute(request)} invoke -&gt; Result.
+                     * {@code request} null ise default-instantiate (ARRANGE seam doldurana dek; boş
+                     * gövde derlenir VE koşar — CoreTemplate1 Fixture.RunAsync paritesi).
+                     */
+                    @SuppressWarnings("unchecked")
+                    public <T> Result<T> run(Class<?> handlerClass, Object request) {
+                        try {
+                            Method exec = findExecuteMethod(handlerClass);
+                            Object arg = request != null ? request : instantiateDefault(exec.getParameterTypes()[0]);
+                            Object handler = context.getBean(handlerClass);
+                            return (Result<T>) exec.invoke(handler, arg);
+                        } catch (ReflectiveOperationException e) {
+                            throw new IllegalStateException(
+                                    "Fixture.run: " + handlerClass.getSimpleName() + ".execute çağrılamadı", e);
+                        }
+                    }
+
+                    /**
+                     * Varlık-tabanı sorgusu (EntityManager): entity tipinden ilk kayıt. {@code id} v1'de
+                     * kullanılmaz (WriteSet ⊆ persisted varlık kontrolü; alan-düzeyi lookup sonraki
+                     * iterasyon — task §7 out-of-scope).
+                     */
+                    public <E> E get(Class<E> entity, String id) {
+                        EntityManagerFactory emf = context.getBean(EntityManagerFactory.class);
+                        EntityManager em = emf.createEntityManager();
+                        try {
+                            var results = em.createQuery("SELECT e FROM " + entity.getSimpleName() + " e", entity)
+                                    .getResultList();
+                            return results.isEmpty() ? null : results.get(0);
+                        } finally {
+                            em.close();
+                        }
+                    }
+
+                    public void close() {
+                        if (context != null) {
+                            context.close();
+                        }
+                    }
+
+                    private static Method findExecuteMethod(Class<?> handlerClass) {
+                        for (Method m : handlerClass.getMethods()) {
+                            if (m.getName().equals("execute") && m.getParameterCount() == 1) {
+                                return m;
+                            }
+                        }
+                        throw new IllegalStateException(handlerClass.getName() + ".execute bulunamadı");
+                    }
+
+                    /** Request record'unu tek (canonical) ctor + primitive-default değerlerle kur. */
+                    private static Object instantiateDefault(Class<?> reqType) {
+                        Constructor<?> ctor = reqType.getDeclaredConstructors()[0];
+                        Class<?>[] ptypes = ctor.getParameterTypes();
+                        Object[] args = new Object[ptypes.length];
+                        for (int i = 0; i < ptypes.length; i++) {
+                            args[i] = defaultFor(ptypes[i]);
+                        }
+                        try {
+                            ctor.setAccessible(true);
+                            return ctor.newInstance(args);
+                        } catch (ReflectiveOperationException e) {
+                            throw new IllegalStateException(
+                                    "Fixture: " + reqType.getSimpleName() + " default-instantiate edilemedi", e);
+                        }
+                    }
+
+                    private static Object defaultFor(Class<?> t) {
+                        if (!t.isPrimitive()) {
+                            return null;
+                        }
+                        if (t == boolean.class) {
+                            return Boolean.FALSE;
+                        }
+                        if (t == long.class) {
+                            return 0L;
+                        }
+                        if (t == double.class) {
+                            return 0d;
+                        }
+                        if (t == float.class) {
+                            return 0f;
+                        }
+                        if (t == short.class) {
+                            return (short) 0;
+                        }
+                        if (t == byte.class) {
+                            return (byte) 0;
+                        }
+                        return 0; // int (Naming.javaType diğer primitive'leri üretmez)
+                    }
+                }
+                """.formatted(urlExpr);
+    }
+
+    // ── T7.1 — TestPlan→JUnit emisyonu (SPEC §6.3 tests satırı; referans §1 TestSkeleton/
+    // TestArrangeSeam) — gm.testPlan()'ın üç listesi (processTests/orphanFlowTests/orphanOpTests)
+    // gezilir; her test owned iskelet (gen/test-java, WriteAlways) + human ARRANGE seam
+    // (src/test/java, WriteIfAbsent) çifti üretir. Single-dışı (Ambiguous/Missing) prereq'li
+    // testler: iskelet/seam EMİT EDİLMEZ, report.unsupported("test-prereq", ...) yazılır (T2.2
+    // kuralının emisyon yüzü). Emit edilen testler census'a GİRMEZ (report.realized("test",...)
+    // ÇAĞRILMAZ) — test construct'ı census'ta YOK, rapor kirletilmez (task §5.2 açık kararı). ──
+
+    /** Ordinal-sıralı gm.operations() üzerinden opId → GmOperation index'i (test-emisyon çözümü). */
+    private static Map<String, GmOperation> opIndex(GenerationModel gm) {
+        Map<String, GmOperation> opById = new HashMap<>();
+        for (GmOperation op : gm.operations()) {
+            opById.put(op.id(), op);
+        }
+        return opById;
+    }
+
+    private static void emitTests(GenerationModel gm, EmitWriter writer, BuildReport report) throws IOException {
+        Map<String, GmOperation> opById = opIndex(gm);
+        var plan = gm.testPlan();
+        for (ProcessTest t : plan.processTests()) {
+            emitOneTest("process", t.processId(), t.runSequence(), t.prerequisites(), t.writeSet(), opById, gm,
+                    writer, report);
+        }
+        for (ScenarioTest t : plan.orphanFlowTests()) {
+            emitOneTest("orphanflow_" + t.id().toLowerCase(Locale.ROOT), t.id(), t.runSequence(), t.prerequisites(),
+                    t.writeSet(), opById, gm, writer, report);
+        }
+        for (ScenarioTest t : plan.orphanOpTests()) {
+            emitOneTest("orphanop_" + t.id().toLowerCase(Locale.ROOT), t.id(), t.runSequence(), t.prerequisites(),
+                    t.writeSet(), opById, gm, writer, report);
+        }
+    }
+
+    /** Prereq/RunSequence'ten çözülmüş tek bir çağrı adımı (index = 1-tabanlı, request{i}() adı). */
+    private record ResolvedStep(int index, GmOperation op, boolean isPrereq, /* @Nullable */ String prereqEntity) {
+    }
+
+    /**
+     * Bir test (Process/OrphanFlow/OrphanOp) için iskelet+seam çifti — ya da (Single-dışı prereq
+     * varsa) hiçbiri + Unsupported("test-prereq", ...). {@code folder} paket-segmenti (lowercase,
+     * task §5.2: {@code process} sabit / {@code orphanflow_{id}}/{@code orphanop_{id}}).
+     */
+    private static void emitOneTest(String folder, String testId, List<String> runSeq, List<PrereqStep> prereqs,
+            List<String> writeSet, Map<String, GmOperation> opById, GenerationModel gm, EmitWriter writer,
+            BuildReport report) throws IOException {
+        boolean allSingle = true;
+        for (PrereqStep p : prereqs) {
+            if (p.kind() != PrereqKind.SINGLE) {
+                allSingle = false;
+                report.unsupported("test-prereq",
+                        testId + ": " + p.entity() + " creator=" + p.kind().name().toLowerCase(Locale.ROOT),
+                        "ön-gereksinim belirsiz/eksik (Single değil) — creator ASLA otomatik seçilmez; "
+                                + "test iskeleti/ARRANGE seam emit edilmez (anti-circularity, T2.2 kuralı)");
+            }
+        }
+        if (!allSingle) {
+            return; // T7.1 Step 5.4 — DUR-marker: iskelet YOK
+        }
+
+        String pkg = "app." + folder;
+        String pathPrefix = "app/" + folder;
+        String className = Naming.pascal(testId) + "Test";
+        String arrangeClassName = Naming.pascal(testId) + "Arrange";
+
+        List<ResolvedStep> steps = new ArrayList<>();
+        int idx = 0;
+        for (PrereqStep p : prereqs) {
+            GmOperation op = opById.get(p.creatorOp());
+            if (op == null) {
+                continue; // savunmacı: creators map her zaman manifest'te var olan op'tan gelir; normal akışta olmaz
+            }
+            idx++;
+            steps.add(new ResolvedStep(idx, op, true, p.entity()));
+        }
+        for (String opId : runSeq) {
+            GmOperation op = opById.get(opId);
+            if (op == null) {
+                continue; // savunmacı: dangling flow target (manifest'te yok) — TestPlanBuilder.derive de toleranslı
+            }
+            idx++;
+            steps.add(new ResolvedStep(idx, op, false, null));
+        }
+
+        writer.writeAlways("gen/test-java/" + pathPrefix + "/" + className + ".java",
+                testSkeletonJava(pkg, className, arrangeClassName, steps, writeSet, gm));
+        writer.writeIfAbsent("src/test/java/" + pathPrefix + "/" + arrangeClassName + ".java",
+                arrangeSeamJava(pkg, arrangeClassName, steps));
+    }
+
+    /** Bir op'un tipli istek kaydı adı ({@code {Op}Command}/{@code {Op}Query}, T3.6 reqName paritesi). */
+    private static String reqNameOf(GmOperation op) {
+        return op.id() + (op.isCommand() ? "Command" : "Query");
+    }
+
+    /**
+     * owned test iskeleti (gen/test-java, WriteAlways) — 3-faz: ARRANGE (human çağrıları, prereq
+     * sırasıyla) / ACT (runSequence sırasıyla fixture.run) / ASSERT (her run Success + WriteSet
+     * varlık kontrolü). {@code doldurulacak} marker'ı BURADA ASLA (owned dosya; T2.6/§7 kuralı) —
+     * yalnız {@link #arrangeSeamJava} içinde.
+     */
+    private static String testSkeletonJava(String pkg, String className, String arrangeClassName,
+            List<ResolvedStep> steps, List<String> writeSet, GenerationModel gm) {
+        Set<String> handlerImports = new TreeSet<>();
+        for (ResolvedStep s : steps) {
+            String slicePkg = Naming.slicePackage(s.op().module(), s.op().id());
+            handlerImports.add("import " + slicePkg + "." + s.op().id() + "Handler;\n");
+        }
+        Set<String> entityImports = new TreeSet<>();
+        List<String> entityAssertLines = new ArrayList<>();
+        for (String entityId : writeSet) {
+            EntityJson e = findEntity(gm, entityId);
+            if (e == null) {
+                entityAssertLines.add("        // WriteSet entity '" + entityId + "' manifest'te yok — atlandı\n");
+                continue;
+            }
+            entityImports.add("import app." + Naming.packageOf(e.module()) + "." + entityId + ";\n");
+            entityAssertLines.add("        assertNotNull(fixture.get(" + entityId + ".class, null));\n");
+        }
+
+        List<ResolvedStep> prereqSteps = new ArrayList<>();
+        List<ResolvedStep> actSteps = new ArrayList<>();
+        for (ResolvedStep s : steps) {
+            (s.isPrereq() ? prereqSteps : actSteps).add(s);
+        }
+
+        StringBuilder body = new StringBuilder();
+        body.append("    @Test\n");
+        body.append("    void runs() {\n");
+        if (!prereqSteps.isEmpty()) {
+            body.append("        // ARRANGE (human): ").append(arrangeClassName)
+                    .append(".requestN() çağrıları — prereq sırasıyla (SINGLE creator'lar)\n");
+            for (ResolvedStep s : prereqSteps) {
+                body.append("        Result<?> r").append(s.index()).append(" = fixture.run(")
+                        .append(s.op().id()).append("Handler.class, arrange.request").append(s.index())
+                        .append("()); // ön-gereksinim: ").append(s.prereqEntity()).append('\n');
+            }
+            body.append('\n');
+        }
+        body.append("        // ACT (owned): runSequence sırasıyla fixture.run({Op}Handler.class, "
+                + "arrange.requestN())\n");
+        if (actSteps.isEmpty()) {
+            body.append("        // runSequence boş\n");
+        }
+        for (ResolvedStep s : actSteps) {
+            body.append("        Result<?> r").append(s.index()).append(" = fixture.run(")
+                    .append(s.op().id()).append("Handler.class, arrange.request").append(s.index()).append("());\n");
+        }
+        body.append('\n');
+        body.append("        // ASSERT (owned): her run sonucu Success; WriteSet'teki her entity için "
+                + "fixture.get(...) != null\n");
+        for (ResolvedStep s : steps) {
+            body.append("        assertInstanceOf(Success.class, r").append(s.index()).append(");\n");
+        }
+        for (String line : entityAssertLines) {
+            body.append(line);
+        }
+        body.append("    }\n");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(pkg).append(";\n\n");
+        sb.append("import app.Fixture;\n");
+        sb.append("import app.Result;\n");
+        sb.append("import app.Success;\n");
+        for (String imp : handlerImports) {
+            sb.append(imp);
+        }
+        for (String imp : entityImports) {
+            sb.append(imp);
+        }
+        sb.append('\n');
+        sb.append("import org.junit.jupiter.api.Test;\n\n");
+        sb.append("import static org.junit.jupiter.api.Assertions.assertInstanceOf;\n");
+        sb.append("import static org.junit.jupiter.api.Assertions.assertNotNull;\n\n");
+        sb.append("// owned test iskeleti (üreteç-sahibi; her run yenilenir). ARRANGE gövdeleri seam'de "
+                + "(WriteIfAbsent).\n");
+        sb.append("public class ").append(className).append(" {\n\n");
+        sb.append("    private final Fixture fixture = new Fixture();\n");
+        sb.append("    private final ").append(arrangeClassName).append(" arrange = new ").append(arrangeClassName)
+                .append("();\n\n");
+        sb.append(body);
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * ARRANGE human-seam (src/test/java, WriteIfAbsent) — her SINGLE prereq + her runSequence adımı
+     * için tipli {@code request{i}()} metodu (marker {@code doldurulacak} birebir korunur; test-arrange
+     * skill'i (eval #9) bu noktaları bulur). owned iskeletin çağırdığı isimlerle BİREBİR (aynı
+     * {@code steps} listesinden türer — linkage hatası imkânsız).
+     */
+    private static String arrangeSeamJava(String pkg, String arrangeClassName, List<ResolvedStep> steps) {
+        Set<String> reqImports = new TreeSet<>();
+        for (ResolvedStep s : steps) {
+            String slicePkg = Naming.slicePackage(s.op().module(), s.op().id());
+            reqImports.add("import " + slicePkg + "." + reqNameOf(s.op()) + ";\n");
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(pkg).append(";\n\n");
+        for (String imp : reqImports) {
+            sb.append(imp);
+        }
+        if (!reqImports.isEmpty()) {
+            sb.append('\n');
+        }
+        sb.append("// ARRANGE human-seam (").append(arrangeClassName)
+                .append("): op-başı tipli request payload'ları — insan/LLM doldurur. gen ezmez (WriteIfAbsent).\n");
+        sb.append("public class ").append(arrangeClassName).append(" {\n\n");
+        for (ResolvedStep s : steps) {
+            sb.append("    public ").append(reqNameOf(s.op())).append(" request").append(s.index())
+                    .append("() {\n");
+            sb.append("        return null; // Arrange ").append(s.op().id())
+                    .append(": doldurulacak — tutarlı başlangıç payload'u kur\n");
+            sb.append("    }\n\n");
+        }
+        sb.append("}\n");
         return sb.toString();
     }
 }
