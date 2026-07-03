@@ -17,7 +17,7 @@
     "M2": {"tasks": ["T2.1", "T2.2", "T2.3", "T2.4"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-03 (resume session)", "note": "T2.3||T2.4 paralel penceresi başarılı (worktree + merge 7c1e8ef); verifier-reports/M2-milestone.json"},
     "M3": {"tasks": ["T3.1", "T3.2", "T3.3", "T3.4", "T3.5", "T3.6", "T3.7"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-03 (resume session)", "note": "Üretilen app 45 dosya compile exit 0; build-report 48/48 realized 0 silentDrop; P2 penceresi (T3.5) sonunda main'de sıralı bitti (worktree iptal). verifier-reports/M3-milestone.json"},
     "M4": {"tasks": ["T4.1", "T4.2", "T4.3", "T4.4", "T4.5"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-03 (resume session)", "note": "Parite süpürmesi: fixture 0 silentDrop (bağımsız harness, census 77=76 realized+1 unsupported), grpc explicit UNSUPPORTED, üretilen app 60 dosya compile exit 0. verifier-reports/M4-milestone.json. M4 close → rule 8 (ctor-threading) RETIRED."},
-    "M5": {"tasks": ["T5.1"], "status": "pending"},
+    "M5": {"tasks": ["T5.1"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04 (resume session)", "note": "java -jar uçtan uca exit 0 (bağımsız), build-report+provenance yazılı, üretilen app 68 class compile. 2 bulgu temiz (sentetik-drop ikamesi meşru, GmBuilder gap .NET ile tutarlı). verifier-reports/M5-milestone.json"},
     "M6": {"tasks": ["T6.1", "T6.2", "T6.3"], "status": "pending"},
     "M7": {"tasks": ["T7.1"], "status": "pending"},
     "M8": {"tasks": ["T8.1", "T8.2"], "status": "pending"},
