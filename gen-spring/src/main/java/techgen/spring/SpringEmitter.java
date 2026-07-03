@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import techgen.core.gm.GenerationModel;
+import techgen.core.model.EntityFieldJson;
+import techgen.core.model.EntityJson;
 import techgen.core.model.ErrorJson;
 import techgen.core.model.EventJson;
 import techgen.core.model.ExtJson;
@@ -60,6 +62,11 @@ public final class SpringEmitter {
             writer.writeAlways("gen/java/app/EventBus.java", eventBusJava());
         }
 
+        // ── PersistenceConfig (T3.4 §5.2; SPEC §6.3 AppDbContext.g.cs satırı) — yalnız entities>0 ──
+        if (!gm.entities().isEmpty()) {
+            writer.writeAlways("gen/java/app/PersistenceConfig.java", persistenceConfigJava());
+        }
+
         // ── modül döngüsü (sonraki task'lar bu döngüye op/entity emisyonu ekleyecek) ──
         for (ModuleDecl module : gm.modules()) {
             String pkg = Naming.packageOf(module.name());
@@ -89,6 +96,16 @@ public final class SpringEmitter {
                     continue;
                 }
                 writer.writeAlways("gen/java/app/" + pkg + "/" + event.id() + ".java", eventJava(event, report));
+            }
+
+            // ── Entities → @Entity + JpaRepository (T3.4 §5.1-5.2) ──
+            for (EntityJson entity : gm.entities()) {
+                if (!entity.module().equals(module.name())) {
+                    continue;
+                }
+                writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + ".java", entityJava(entity, report));
+                writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + "Repository.java",
+                        repositoryJava(entity));
             }
         }
 
@@ -315,6 +332,13 @@ public final class SpringEmitter {
             }
             importedClasses.append(cls).append(".class");
             report.realized("module", module.name());
+        }
+        // entities>0 → PersistenceConfig kaydı (aynı paket "app" — import satırı gerekmez).
+        if (!gm.entities().isEmpty()) {
+            if (!importedClasses.isEmpty()) {
+                importedClasses.append(", ");
+            }
+            importedClasses.append("PersistenceConfig.class");
         }
         // events>0 → EventBus bean kaydı (.NET Bootstrap.g.cs `AddScoped<IEventBus, OutboxEventBus>` paritesi).
         boolean eventBusBean = !gm.events().isEmpty();
@@ -600,6 +624,157 @@ public final class SpringEmitter {
                 + imports
                 + (imports.isEmpty() ? "" : "\n")
                 + "public record " + event.id() + "(" + components + ") {\n}\n";
+    }
+
+    // ── Entity → @Entity (T3.4 §5.1; SPEC §6.3 Entities.g.cs satırı; referans §1 `:755-787`).
+    // Mutable sınıf (record DEĞİL — JPA @Version alanı setter ister). Field-level ext (T4.5 sweep
+    // kapsamı, §5.4 dışı) ve invariants (T3.5) BURADA emit edilmez. ──
+
+    private static String entityJava(EntityJson entity, BuildReport report) {
+        List<EntityFieldJson> fields = entity.fields();
+        boolean hasId = fields.stream().anyMatch(f -> "id".equals(f.name()));
+        boolean hasEnum = fields.stream().anyMatch(f -> "enum".equals(f.ref()));
+        boolean optimistic = "optimistic".equals(entity.concurrency());
+
+        StringBuilder imports = new StringBuilder();
+        if (hasEnum) {
+            imports.append("import jakarta.persistence.EnumType;\n");
+            imports.append("import jakarta.persistence.Enumerated;\n");
+        }
+        imports.append("import jakarta.persistence.Entity;\n");
+        if (hasId) {
+            imports.append("import jakarta.persistence.Id;\n");
+        }
+        imports.append("import jakarta.persistence.Table;\n");
+        if (optimistic) {
+            imports.append("import jakarta.persistence.Version;\n");
+        }
+        imports.append(entityFieldImports(fields));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.").append(Naming.packageOf(entity.module())).append(";\n\n");
+        sb.append(imports).append('\n');
+        sb.append(typeLevelExtComment(entity.ext(), entity.id(), report));
+        sb.append("@Entity\n");
+        sb.append("@Table(name = \"").append(entity.id()).append("\")\n");
+        sb.append("public class ").append(entity.id()).append(" {\n\n");
+
+        for (EntityFieldJson f : fields) {
+            if (f.sourceOfTruth() != null) {
+                report.realized("sourceOfTruth", entity.id() + "." + f.name());
+                report.policy("source-of-truth", "cross-module FK reference; no navigation (generator-policy)");
+                sb.append("    // sourceOfTruth: ").append(f.sourceOfTruth().module()).append('.')
+                        .append(f.sourceOfTruth().entity()).append(" — cross-module FK; navigasyon AÇILMAZ\n");
+            }
+            if ("id".equals(f.name())) {
+                sb.append("    @Id\n");
+            } else if ("enum".equals(f.ref())) {
+                sb.append("    @Enumerated(EnumType.STRING)\n");
+            }
+            sb.append("    private ").append(Naming.javaType(f.type(), f.collection())).append(' ')
+                    .append(Naming.camel(f.name())).append(";\n\n");
+        }
+
+        if (optimistic) {
+            report.realized("concurrency", entity.id());
+            sb.append("    @Version\n");
+            sb.append("    private long version;\n\n");
+        }
+
+        for (EntityFieldJson f : fields) {
+            appendAccessors(sb, Naming.javaType(f.type(), f.collection()), Naming.camel(f.name()));
+        }
+        if (optimistic) {
+            appendAccessors(sb, "long", "version");
+        }
+
+        report.realized("entity", entity.id());
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /** getX()/setX() çifti (boolean primitive → isX()); JPA mutable sınıf ister — record DEĞİL. */
+    private static void appendAccessors(StringBuilder sb, String type, String fieldName) {
+        String pascal = Naming.pascal(fieldName);
+        String getterPrefix = "boolean".equals(type) ? "is" : "get";
+        sb.append("    public ").append(type).append(' ').append(getterPrefix).append(pascal).append("() {\n");
+        sb.append("        return ").append(fieldName).append(";\n");
+        sb.append("    }\n\n");
+        sb.append("    public void set").append(pascal).append('(').append(type).append(' ').append(fieldName)
+                .append(") {\n");
+        sb.append("        this.").append(fieldName).append(" = ").append(fieldName).append(";\n");
+        sb.append("    }\n\n");
+    }
+
+    /** Entity alan tiplerine göre gereken import satırları ({@link #typeFieldImports} ile aynı sıra). */
+    private static String entityFieldImports(List<EntityFieldJson> fields) {
+        boolean bigDecimal = false;
+        boolean instant = false;
+        boolean localDate = false;
+        boolean duration = false;
+        boolean list = false;
+        for (EntityFieldJson f : fields) {
+            switch (Naming.javaType(f.type(), false)) {
+                case "BigDecimal" -> bigDecimal = true;
+                case "Instant" -> instant = true;
+                case "LocalDate" -> localDate = true;
+                case "Duration" -> duration = true;
+                default -> { }
+            }
+            if (f.collection()) {
+                list = true;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        if (bigDecimal) {
+            sb.append("import java.math.BigDecimal;\n");
+        }
+        if (instant) {
+            sb.append("import java.time.Instant;\n");
+        }
+        if (localDate) {
+            sb.append("import java.time.LocalDate;\n");
+        }
+        if (duration) {
+            sb.append("import java.time.Duration;\n");
+        }
+        if (list) {
+            sb.append("import java.util.List;\n");
+        }
+        return sb.toString();
+    }
+
+    // ── Repository (T3.4 §5.2; SPEC §6.3 AppDbContext.g.cs satırı; referans §1 `:1189-1212`) —
+    // entity başına tek JpaRepository arayüzü; String ID (SPEC §6.4: ID/*Id soneki → String). ──
+
+    private static String repositoryJava(EntityJson entity) {
+        return """
+                package app.%s;
+
+                import org.springframework.data.jpa.repository.JpaRepository;
+
+                public interface %sRepository extends JpaRepository<%s, String> {
+                }
+                """.formatted(Naming.packageOf(entity.module()), entity.id(), entity.id());
+    }
+
+    // ── PersistenceConfig (root, T3.4 §5.2; entities>0) — açık @EnableJpaRepositories/@EntityScan
+    // kaydı (component-scan YOK, SPEC §12/4 tam-açık kayıt kararı); GeneratedBootstrap'a @Import edilir. ──
+
+    private static String persistenceConfigJava() {
+        return """
+                package app;
+
+                import org.springframework.boot.autoconfigure.domain.EntityScan;
+                import org.springframework.context.annotation.Configuration;
+                import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+
+                @Configuration
+                @EnableJpaRepositories(basePackages = "app")
+                @EntityScan(basePackages = "app")
+                public class PersistenceConfig {
+                }
+                """;
     }
 
     // ── EventBus (root, events>0): cross-module publish seam + altyapı stub (SPEC §6.3 satırı;
