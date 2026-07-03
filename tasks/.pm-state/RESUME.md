@@ -1,68 +1,65 @@
 # RESUME — techgen-spring PM checkpoint
 
-_Yazılma: 2026-07-03 (resume session — M3 ortası, kredi bitişi molası)_
+_Yazılma: 2026-07-03 (resume session — M3 KAPANDI, M4 girişi)_
 _Run: 2026-07-03T10-41-58Z-tasks · retry=3 · executor=Sonnet · verifier=Opus_
-_Son yeşil kök test: 116 (M2 kapanışında). M3 sürüyor — gen-spring test sayısı T3.4 sonrası 42._
+_Son yeşil kök test: 178 (gen-core 104 + gen-spring 72 + gen-cli 1 + conformance 1). Üretilen app 45 dosya compile exit 0._
 
-## ⚠️ /clear SONRASI İLK 3 ADIM (resume eden PM buradan başla)
+## ⚠️ /clear SONRASI İLK ADIMLAR
 
-1. **Sağlık kontrolü:** Rule-7 JDK21 export ile kökten `mvn test` → exit 0 beklenir (gen-core 104 + gen-spring 42 + gen-cli 1 + conformance 1 = 148). git log HEAD=52310b2 (T3.4).
-2. **T3.4 VERIFIER'ı KOŞ (EN ÖNCELİKLİ):** T3.4 executor DONE ama HENÜZ DOĞRULANMADI (commit 52310b2). Opus verifier spawn et — tasks/T3-4-jpa.md'ye karşı bağımsız doğrula. Özellikle yargıla: (a) @Id/@Version/@Enumerated fixture'la eşleşiyor mu; (b) sourceOfTruth'ta İLİŞKİ AÇILMADIĞI negatif assert'li mi; (c) PersistenceConfig Bootstrap'a @Import edilmiş mi; (d) entity-level ext'in typeLevelExtComment ile realize'ı spec-uyumlu mu; (e) gen-core dokunulmamış + SpringEmitter'da reformatlama yok.
-3. **T3.4 PASS ise → T3.5 (JavaPredicateRenderer + Guards + Invariants) DOĞRUDAN MAIN'de** (worktree YOK — silindi). Sonra T3.6 → T3.7 → M3 milestone verifier.
+1. Sağlık: Rule-7 JDK21 export ile kökten `mvn test` → exit 0 (~178 test). git HEAD son PM checkpoint commit'i (M3).
+2. SIRADAKI: M4 = T4.1→T4.2→T4.3→T4.4→T4.5 TAMAMEN SIRALI (ayak-izi: ortak HandlerBase ctor/field bloğu). T4.1 (Idempotency+Pagination) executor'ı koşuyor/koşulacak.
+3. **T4.3 için AKTİF scaffolding rule** (aşağıda rule 9) — T4.3 executor+verifier prompt'una MUTLAKA verbatim taşı.
 
 ## Durum özeti
 
 | Milestone | Durum |
 |---|---|
-| M0, M1, M2 | ✅ PASS (milestone verifier dahil) |
-| M3 | T3.1 ✅ T3.2 ✅ T3.3 ✅ · **T3.4 executor-DONE/doğrulanmadı (52310b2)** · T3.5 pending(main'de) · T3.6, T3.7 pending |
-| M4-M10 | bekliyor |
+| M0, M1, M2, M3 | ✅ PASS (milestone verifier dahil) |
+| M4 | T4.1 in_progress · T4.2-T4.5 pending (SIRALI) |
+| M5-M10 | bekliyor |
 
-Retry-FAIL sayısı: 0. T3.1'de bir reconcile (finishAndPrune imza hizalama, commit 1bc1221) — verifier PASS sonrası spec-uyum düzeltmesi, retry değil.
+Retry-FAIL: 0. T3.5 executor 4× API stream-stall yaşadı (mantık değil altyapı) — SendMessage resume + küçük-adım stratejisiyle aşıldı, PASS.
 
-Commit zinciri (M3): 3e9e9c9 (T3.1) → 1bc1221 (T3.1 hizalama) → bf0fd93 (T3.2) → 5ff6a6a (T3.3) → 52310b2 (T3.4).
+M3 commit zinciri: 3e9e9c9→1bc1221(T3.1)→bf0fd93(T3.2)→5ff6a6a(T3.3)→52310b2(T3.4)→fec500b(T3.5)→3d5550c(T3.6)→9d836ca(T3.7).
 
 ## Paralellik rejimi
 
-- Onaylı paket (escalations/2026-07-03T12-30-parallelism.md): T2.3∥T2.4 ✅(bitti), T6.2∥T6.3(worktree), T9.2∥T9.3, M8∥M6-M7(worktree, graf sapması onaylı).
-- M3/M4 pencere-bazlı (escalations/2026-07-03T16-20-parallelism-m3m4.md + .pm-state/p2p3-footprint-karar.md):
-  - **P2 (T3.3/T3.4/T3.5):** [T3.3→T3.4] ana ağaçta sıralı ∥ T3.5 worktree PLANLANMIŞTI. GERÇEKLEŞEN: T3.3, T3.4 sıralı bitti; T3.5 worktree denemesi 2× API kesintisiyle düştü (kod yazılmadı) → worktree silindi, **T3.5 main'de sıralı** koşacak (paralel komşular bitti, worktree faydası kalmadı).
-  - **P3 (M4=T4.1-T4.5): TAMAMEN SIRALI** — T4.1/T4.2/T4.4 aynı HandlerBase ctor/field bloğu + ctor-senkron Wiring çağrısı = yoğun çakışma; ayak-izi analizi (p2p3-footprint-karar.md) sıralıyı zorunlu kılıyor.
+- Onaylı paket (escalations/2026-07-03T12-30): T2.3∥T2.4 ✅. Kalan: T6.2∥T6.3(worktree), T9.2∥T9.3, M8∥M6-M7(worktree, graf sapması onaylı).
+- **M4 (T4.1-T4.5): TAMAMEN SIRALI** — p2p3-footprint-karar.md: T4.1/T4.2/T4.4 aynı HandlerBase ctor/field bloğu + ctor-senkron Wiring çağrısı = yoğun çakışma; worktree faydasız. T4.5 zaten süpürme (en son).
+- Worktree deseni ileride yalnız GERÇEKTEN ayrık-dosyalı işlerde (M6.2/6.3, M8) kullanılacak.
 
 ## Active standing rules
 
-1. [SCOPE: architectural] CoreTemplate1 (/Users/hakansoysal/Desktop/ClaudeCode Denemeler/CoreTemplate1) READ-ONLY; okunur, ASLA yazılmaz.
+1. [SCOPE: architectural] CoreTemplate1 READ-ONLY; okunur, ASLA yazılmaz.
 2. [SCOPE: process] "Derleniyor/testler geçiyor" yalnız GERÇEK mvn çıktısıyla (exit code gözlendi).
 3. [SCOPE: process] Golden yalnız UPDATE_GOLDEN=1 + task raporunda diff gerekçesiyle güncellenir.
-4. [SCOPE: architectural] SPEC sapması → DUR + raporla (PM müşteriye eskale eder); sessiz sapma yok.
-5. [SCOPE: process] Executor insan-okur raporunu tasks/raporlar/T{X}-{Y}.md'ye yazar (plan §4 — plan klasörüne izinli TEK yazma).
-6. [SCOPE: process] tasks/_uyumluluk-raporu-2026-07-03.md §7 kararları bağlayıcı: controller kaydı TAM-AÇIK @Bean (scan yok); Generation Gap seam + 'doldurulacak' marker HUMAN-SEAM işaretidir (gen-owned WriteAlways dosyalara KOYULMAZ — T3.3'te bu ayrım doğrulandı); parent-POM / h2 onaylı.
+4. [SCOPE: architectural] SPEC sapması → DUR + raporla; sessiz sapma yok. İç-tutarsızlıkta verifier MEŞRU-mu-ESCALATE-mi yargılar; kaynak (SPEC/.NET parite) otoriter.
+5. [SCOPE: process] Executor insan-okur raporunu tasks/raporlar/T{X}-{Y}.md'ye yazar (plan §4 — izinli TEK plan-klasörü yazımı).
+6. [SCOPE: process] tasks/_uyumluluk-raporu-2026-07-03.md §7 bağlayıcı: TAM-AÇIK @Bean (component-scan YOK; JPA @EnableJpaRepositories/@EntityScan istisna=idiomatik, iş-bean scan DEĞİL); Generation Gap seam + 'doldurulacak' HUMAN-SEAM marker (WriteIfAbsent human dosyalarda; gen-owned WriteAlways'te ASLA); h2.
 7. [SCOPE: environmental] JDK 21 sistemde YOK. Temurin 21.0.11:
    `/private/tmp/claude-501/-Users-hakansoysal-Desktop-ClaudeCode-Denemeler-SpringBoot-Template/eb7a559a-6022-43dc-b5cd-8073348492aa/scratchpad/jdk21/jdk-21.0.11+10/Contents/Home`
-   HER java/mvn komutu öncesi AYNI Bash çağrısında JAVA_HOME+PATH export. **DİKKAT (resume):** /private/tmp altında — reboot'ta silinmiş olabilir; yoksa `mvn`den önce `ls "$JDK/bin/java"` ile doğrula, yoksa Adoptium'dan yeniden kur ve bu yolu güncelle (escalations/2026-07-03T10-45-jdk21.md).
-8. [SCOPE: process] gen-spring mvn koşumlarında `-am` ZORUNLU (gen-core .m2'de kurulu değil; -am'siz literal komut exit 1 verir — kod kusuru değil, ortam gerçeği).
-9. [SCOPE: process] Push yalnız origin main'e, PM kararıyla, milestone checkpoint'lerinde. **DİKKAT:** Bu oturumda otomatik push izin sınıflandırıcısınca REDDEDİLDİ (oturum-içi açık onay yok). Push gerekiyorsa kullanıcıdan açık onay al veya kullanıcı `! git push origin main` çalıştırsın. Şu an origin, M2 checkpoint'ten (05bb4d5) sonra push EDİLMEMİŞ durumda — local commit'ler: 5ff6a6a, 52310b2 + sonrası.
+   HER java/mvn öncesi AYNI Bash çağrısında export; ilk-iş `ls "$JDK/bin/java"`. /private/tmp — reboot'ta silinebilir, yoksa Adoptium'dan kur + yolu güncelle (escalations/2026-07-03T10-45-jdk21.md).
+8. [SCOPE: process] gen-spring mvn koşumlarında `-am` ZORUNLU (gen-core .m2'de garanti değil; T3.7 executor'ı bir kez `mvn -pl gen-core -am install` koştu ama buna GÜVENME, -am kullan). Push yalnız origin main'e, PM kararıyla, milestone checkpoint'lerinde. **DİKKAT:** otomatik push izin sınıflandırıcısınca REDDEDİLDİ; kullanıcı açık onayı veya `! git push origin main` gerekir. Origin M2 checkpoint'ten (05bb4d5) sonra push EDİLMEDİ.
+9. [SCOPE: scaffolding; retire-at: T4.3 PASS] **T4.3 (@trigger) executor'ı @trigger.{name} için report.realized(...) ÇAĞIRMAMALI.** T3.7 (9d836ca) tüm ext ns'lerini @trigger dahil ExtPartial paritesiyle (DotnetEmitter:1145) zaten realize ediyor; .NET TriggerPartial (:1105-1123) yalnız Policy('trigger-wiring') üretir, Realized çağırmaz. T4.3 yalnız TriggerBase + human seam + wiring bean + policy('trigger-wiring') üretmeli. UYARI: T4.3 task metni ~satır 245 literal 'realized(@trigger.{name})' diyor — .NET paritesiyle ÇELİŞİR, bu kuralla EZİLİR (note deseninin aynısı). Kaynak-teyit: verifier-reports/T3-7-attempt-1.json.
+10. [SCOPE: process] Executor verimlilik: uzun analiz turları API stream-stall'a yakalanıyor (T3.5'te 4×). Executor prompt'una ekle: advisor çağırma; okumadan sonra doğrudan yaz; işi küçük turlara böl (kod→test→mvn→commit). Kesintide SendMessage ile agentId'ye "kaldığın yerden devam et" resume; kod kaybı yoksa fresh spawn.
 
-## Executor spawn deseni (kanıtlanmış — kopyala)
+## Known follow-up notes (doc-only, non-blocking)
 
-- Model: sonnet (kullanıcı direktifi, kritik yol dahil). Verifier: opus (her zaman).
-- Prompt şablonu: references/executor-prompt.md + yukarıdaki Active rules 1-9 verbatim GLOBAL CONTEXT'e.
-- Her executor: mvn -am + JDK21 export; commit "T{X}.{Y}: <özet>"; .pm-state/ + .claude/settings.local.json ASLA stage; push yok; rapor tasks/raporlar/T{X}-{Y}.md.
-- Executor DONE → subagent-reports/T{X}-{Y}-attempt-N.json yaz → Opus verifier spawn → verifier-reports/T{X}-{Y}-attempt-N.json → PASS ise TaskUpdate completed + status.json.
-- **API kesintisinde** (stream stall / kredi): agent'ı SendMessage ile agentId'sine "kaldığın yerden devam et" mesajıyla resume et (bağlam korunur). İki kez düşerse (T3.5 gibi) fresh spawn + gerekiyorsa worktree'yi temizle.
+- **tasks/T3-5-predicate.md §5.1** 'o da yoksa Double varsay' → 'Decimal/BigDecimal varsay' düzeltilmeli (kendi parantezi + §5.4 + CoreTemplate1 son-çare decimal ile çelişiyor; kod doğru, belge yanıltıcı). verifier-reports/T3-5-attempt-2.json.
+- **tasks/IMPLEMENTATION-PLAN.md T4.3 ~satır 245** 'realized(@trigger.{name})' — .NET paritesiyle çelişir (rule 9); belge düzeltilmeli.
+- Provenance alan adı `clazz` vs .NET `Class` — byte-eşit cross-runtime tüketici yok; C#-golden eklenirse yeniden değerlendir.
+- {ns}-realization policy açıklaması 'annotation/interceptor' vs .NET anchor 'interceptor/attribute' — pinlenmemiş, benign (T3-7 verifier).
 
-## Devam eden gözlemler (bloklamayan)
+## Executor/Verifier spawn deseni
 
-- T2.4 plan-metni niti (doc-only): M2 T2.4 DoD literal komutu -am'siz; kural 8 bunu kapsıyor.
-- Provenance alan adı `clazz` vs .NET `Class` — byte-eşit cross-runtime tüketici yok; C#-üretimli byte-golden eklenirse yeniden değerlendir.
-- GmBuilderTest bayat yorumlar — housekeeping adayı.
-- Verifier raporları .pm-state/verifier-reports/ altında: T2-3, T2-4, M2-milestone, T3-1, T3-2, T3-3 mevcut. subagent-reports/ + subagent-prompts/ aynı şekilde. **T3-4 verifier raporu HENÜZ YOK — koşulacak.**
+- Executor model sonnet, verifier opus (her zaman). Prompt: executor-prompt.md/verifier-prompt.md + Active rules 1-10 verbatim GLOBAL CONTEXT'e (T4.3 spawn'ında rule 9 dahil).
+- Akış: executor DONE → subagent-reports/*.json → opus verifier → verifier-reports/*.json → PASS ise TaskUpdate completed + status.json. Milestone bitince milestone verifier + RESUME güncelle + PM checkpoint commit.
 
 ## State files of record
 
-- `.pm-state/status.json` — makine-okur run state (T3.4 = executor_done_unverified)
-- `.pm-state/escalations/` — 3 dosya (jdk21, parallelism 12:30, parallelism-m3m4 16:20)
-- `.pm-state/p2p3-footprint-karar.md` — P2/P3 dosya-ayak-izi analizi + paralellik kararı
-- `.pm-state/verifier-reports/` — 6 verdict (T3-4 eksik)
-- TaskList (harness): #1-4 completed, #5(T3.3) completed, #6(T3.4) in_progress(=executor done, verify pending), #7(T3.5) pending, #8+ pending
-- Model notu: kullanıcı oturum default'unu Opus 4.8'e çevirdi; executor spawn'ları YİNE sonnet (kullanıcı önceki direktifi) — aksini istemedikçe koru.
+- .pm-state/status.json — M0-M3 completed; M4 T4.1 in_progress. open_observations: rule 1-10 (rule 9 scaffolding retire-at T4.3, rule 10 process).
+- .pm-state/verifier-reports/ — T2-3,T2-4,M2,T3-1..T3-7,M3 (13 verdict).
+- .pm-state/p2p3-footprint-karar.md — M4 sıralı gerekçesi.
+- .pm-state/escalations/ — 3 (jdk21, parallelism 12:30, parallelism-m3m4 16:20).
+- TaskList: #1-9 completed, #10(T4.1) in_progress, #11-25 pending.
+- Model: kullanıcı oturum default'u Opus 4.8; executor spawn'ları YİNE sonnet (kullanıcı direktifi) — aksi istenmedikçe koru.
