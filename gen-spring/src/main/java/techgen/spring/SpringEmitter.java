@@ -11,11 +11,14 @@ import techgen.core.errors.UnsupportedConstruct;
 import techgen.core.gm.GenerationModel;
 import techgen.core.gm.GmOperation;
 import techgen.core.model.Abac;
+import techgen.core.model.BoundaryOpJson;
+import techgen.core.model.CallEdgeJson;
 import techgen.core.model.EntityFieldJson;
 import techgen.core.model.EntityJson;
 import techgen.core.model.ErrorJson;
 import techgen.core.model.EventJson;
 import techgen.core.model.ExprNode;
+import techgen.core.model.ExternalJson;
 import techgen.core.model.ExtJson;
 import techgen.core.model.FieldJson;
 import techgen.core.model.GuardedExpr;
@@ -26,6 +29,9 @@ import techgen.core.model.ServingArg;
 import techgen.core.model.ServingJson;
 import techgen.core.model.SubscriptionJson;
 import techgen.core.model.TypeJson;
+import techgen.core.model.UnchartedEntity;
+import techgen.core.model.UnchartedJson;
+import techgen.core.model.UnchartedType;
 import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
 
@@ -90,6 +96,44 @@ public final class SpringEmitter {
         // ── PersistenceConfig (T3.4 §5.2; SPEC §6.3 AppDbContext.g.cs satırı) — yalnız entities>0 ──
         if (!gm.entities().isEmpty()) {
             writer.writeAlways("gen/java/app/PersistenceConfig.java", persistenceConfigJava());
+        }
+
+        // ── Boundary externals (T4.4; SPEC §6.3 Boundary.g.cs satırı) — external başına {Ext}
+        // arayüzü (gen-owned) + human {Ext}Client seam (writeIfAbsent) + (validation varsa)
+        // caller-side {Ext}{Op}Validation. calls/compensate saga yorumları + policy'leri T4.5. ──
+        for (ExternalJson ext : gm.externals()) {
+            writer.writeAlways("gen/java/app/boundary/" + ext.name() + ".java", boundaryFile(ext, report));
+            writer.writeIfAbsent("src/main/java/app/boundary/" + ext.name() + "Client.java",
+                    boundaryClientJava(ext));
+            for (BoundaryOpJson b : ext.operations()) {
+                if (b.validation() != null && !b.validation().isEmpty()) {
+                    writer.writeAlways(
+                            "gen/java/app/boundary/" + ext.name() + Naming.pascal(b.id()) + "Validation.java",
+                            boundaryValidationJava("app.boundary", ext.name(), b, report));
+                }
+            }
+        }
+
+        // ── Uncharted (T4.4; SPEC §6.3 Uncharted/{Name}.g.cs satırı) — gen-owned stub interface +
+        // {Name}StubClient (human seam DEĞİL) + OWNED entity/type POJO'ları (JPA'ya bağlanmaz) +
+        // (validation varsa) caller-side {Name}{Op}Validation. ──
+        for (UnchartedJson u : gm.uncharted()) {
+            writer.writeAlways("gen/java/app/uncharted/" + u.name() + ".java", unchartedFile(u, report));
+            for (UnchartedEntity e : u.entities()) {
+                writer.writeAlways("gen/java/app/uncharted/" + u.name() + e.id() + ".java",
+                        unchartedEntityJava(u, e, report));
+            }
+            for (UnchartedType t : u.types()) {
+                writer.writeAlways("gen/java/app/uncharted/" + u.name() + t.id() + ".java",
+                        unchartedTypeJava(u, t));
+            }
+            for (BoundaryOpJson b : u.operations()) {
+                if (b.validation() != null && !b.validation().isEmpty()) {
+                    writer.writeAlways(
+                            "gen/java/app/uncharted/" + u.name() + Naming.pascal(b.id()) + "Validation.java",
+                            boundaryValidationJava("app.uncharted", u.name(), b, report));
+                }
+            }
         }
 
         // ── modül döngüsü (sonraki task'lar bu döngüye op/entity emisyonu ekleyecek) ──
@@ -220,6 +264,15 @@ public final class SpringEmitter {
                     depParamList.add("EventBus eventBus");
                     depArgList.add("eventBus");
                     wiringImports.add("import app.EventBus;");
+                }
+                // T4.4 — bu op bir external çağırıyorsa ({@code callEdges.from==opId && kind=="external"}):
+                // {op}Handler bean'i ayrıca {Ext} client alır (ctor-senkron; idempotent+events'ten
+                // SONRA, EN SONA — M4 ctor-threading kuralı: [repos, idempotent, events, boundary]).
+                for (ExternalJson boundaryExt : boundaryDepsForOp(op, gm)) {
+                    String extField = Naming.camel(boundaryExt.name());
+                    depParamList.add(boundaryExt.name() + " " + extField);
+                    depArgList.add(extField);
+                    wiringImports.add("import app.boundary." + boundaryExt.name() + ";");
                 }
                 String depParams = String.join(", ", depParamList);
                 String depArgs = String.join(", ", depArgList);
@@ -542,7 +595,22 @@ public final class SpringEmitter {
         // T4.1 — herhangi op idempotent!=null → IdempotencyStore EXPLICIT @Bean (component-scan YOK,
         // tasks/_uyumluluk-raporu-2026-07-03.md §7 bağlayıcı; dedup-store=in-memory).
         boolean idempotencyStoreBean = gm.operations().stream().anyMatch(o -> o.op().idempotent() != null);
-        String beanImport = (eventBusBean || idempotencyStoreBean)
+        // T4.4 — external başına {Ext}Client EXPLICIT @Bean (Wiring/Bootstrap tam-açık kayıt;
+        // component-scan YOK; SPEC §12/4). Kullanılıp kullanılmadığına bakılmaksızın her external kaydedilir.
+        boolean anyExternal = !gm.externals().isEmpty();
+        StringBuilder externalImports = new StringBuilder();
+        StringBuilder externalBeans = new StringBuilder();
+        for (ExternalJson ext : gm.externals()) {
+            externalImports.append("import app.boundary.").append(ext.name()).append(";\n");
+            externalImports.append("import app.boundary.").append(ext.name()).append("Client;\n");
+            String camel = Naming.camel(ext.name());
+            externalBeans.append("\n    @Bean\n");
+            externalBeans.append("    public ").append(ext.name()).append(' ').append(camel).append("Client() {\n");
+            externalBeans.append("        return new ").append(ext.name()).append("Client();\n");
+            externalBeans.append("    }\n");
+        }
+        imports.append(externalImports);
+        String beanImport = (eventBusBean || idempotencyStoreBean || anyExternal)
                 ? "import org.springframework.context.annotation.Bean;\n" : "";
         String eventBusMethod = eventBusBean
                 ? """
@@ -562,7 +630,7 @@ public final class SpringEmitter {
                         }
                     """
                 : "";
-        eventBusMethod = eventBusMethod + idempotencyStoreMethod;
+        eventBusMethod = eventBusMethod + idempotencyStoreMethod + externalBeans;
         return """
                 package app;
 
@@ -837,6 +905,17 @@ public final class SpringEmitter {
             fields.append("    protected final EventBus eventBus;\n");
             ctorParams.add("EventBus eventBus");
             ctorAssigns.append("        this.eventBus = eventBus;\n");
+        }
+        // T4.4 — bu op bir external çağırıyorsa (callEdges.from==opId && kind=="external"): DI'a
+        // {Ext} client eklenir (ctor-senkron; idempotent+events'ten SONRA, EN SONA — M4
+        // ctor-threading kuralı: [repos, idempotent, events, boundary]).
+        for (ExternalJson boundaryExt : boundaryDepsForOp(op, gm)) {
+            String extField = Naming.camel(boundaryExt.name());
+            imports.append("import app.boundary.").append(boundaryExt.name()).append(";\n");
+            fields.append("    protected final ").append(boundaryExt.name()).append(' ').append(extField)
+                    .append(";\n");
+            ctorParams.add(boundaryExt.name() + " " + extField);
+            ctorAssigns.append("        this.").append(extField).append(" = ").append(extField).append(";\n");
         }
 
         // T3.7 — Auth (roles/scopes/ownership varsa).
@@ -1217,6 +1296,14 @@ public final class SpringEmitter {
         if (emits) {
             ctorParamList.add("EventBus eventBus");
             superArgList.add("eventBus");
+        }
+        // T4.4 — ctor-senkron: HandlerBase bu op'ta {Ext} client alıyorsa human seam de aynısını
+        // iletir (idempotent+events'ten SONRA — HandlerBase ctor sırasıyla birebir).
+        for (ExternalJson boundaryExt : boundaryDepsForOp(op, gm)) {
+            String extField = Naming.camel(boundaryExt.name());
+            imports.append("import app.boundary.").append(boundaryExt.name()).append(";\n");
+            ctorParamList.add(boundaryExt.name() + " " + extField);
+            superArgList.add(extField);
         }
         String ctorParams = String.join(", ", ctorParamList);
         String superArgs = String.join(", ", superArgList);
@@ -2240,6 +2327,298 @@ public final class SpringEmitter {
         sb.append("public class Subscriptions {\n\n");
         sb.append(beans);
         sb.append("}\n");
+        return sb.toString();
+    }
+
+    // ── Boundary (T4.4; SPEC §6.3 Boundary.g.cs satırı; referans §1 `:913-955`/`:959-974`/
+    // `:977-1014`) — external çağrı-adapter'leri: {@code {Ext}} arayüzü (gen-owned) + human
+    // {@code {Ext}Client} seam (writeIfAbsent, marker) + caller-side {@code {Ext}{Op}Validation}
+    // (INV-4). calls/compensate saga yorumları + policy'leri T4.5 kapsamı (bu task DIŞI). ──
+
+    /** Op'un çağırdığı external'lar ({@code callEdges.from==opId && kind=="external"}), ordinal (ext ismine göre). */
+    private static List<ExternalJson> boundaryDepsForOp(GmOperation op, GenerationModel gm) {
+        Set<String> extNames = new TreeSet<>();
+        for (CallEdgeJson ce : gm.callEdges()) {
+            if (op.id().equals(ce.from()) && "external".equals(ce.kind())) {
+                extNames.add(ce.to().system());
+            }
+        }
+        List<ExternalJson> deps = new ArrayList<>();
+        for (String name : extNames) {
+            for (ExternalJson ext : gm.externals()) {
+                if (ext.name().equals(name)) {
+                    deps.add(ext);
+                    break;
+                }
+            }
+        }
+        return deps;
+    }
+
+    /** Bir boundary-op'un Java dönüş+param tiplerine göre gereken java.* import'ları ({@link #paramImports} sarmalı). */
+    private static String boundaryOpImports(List<BoundaryOpJson> ops) {
+        List<String> javaTypes = new ArrayList<>();
+        for (BoundaryOpJson b : ops) {
+            javaTypes.add(Naming.javaType(b.signature().returns(), false));
+            for (ParamJson p : b.signature().params()) {
+                javaTypes.add(Naming.javaType(p.type(), p.collection()));
+            }
+        }
+        return paramImports(javaTypes);
+    }
+
+    /** Boundary-op parametre listesi ({@code {JavaTip} {camelAd}, ...}). */
+    private static String boundaryOpParams(BoundaryOpJson b) {
+        return b.signature().params().stream()
+                .map(p -> Naming.javaType(p.type(), p.collection()) + " " + Naming.camel(p.name()))
+                .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * Step 5.1 — {@code gen/java/app/boundary/{Ext}.java}: {@code public interface {Ext}} — her
+     * boundary-op bir metot; serving varsa metot üstü yorum. {@code realized("external", name)},
+     * her op {@code realized("boundary-op", "{ext}.{op}")}, serving başına
+     * {@code realized("serving", "{ext}.{op}:{proto}")}.
+     */
+    private static String boundaryFile(ExternalJson ext, BuildReport report) {
+        report.realized("external", ext.name());
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.boundary;\n\n");
+        String stdImports = boundaryOpImports(ext.operations());
+        if (!stdImports.isEmpty()) {
+            sb.append(stdImports).append('\n');
+        }
+        sb.append("// external çağrı-adapter'i (generated:false → sistemi ÜRETME, yalnız çağıran arayüz).\n");
+        sb.append("public interface ").append(ext.name()).append(" {\n\n");
+        for (BoundaryOpJson b : ext.operations()) {
+            report.realized("boundary-op", ext.name() + "." + b.id());
+            for (ServingJson s : b.serving() == null ? List.<ServingJson>of() : b.serving()) {
+                report.realized("serving", ext.name() + "." + b.id() + ":" + s.protocol());
+                sb.append("    // serving: ").append(s.raw()).append(" — transport client sorumluluğu\n");
+            }
+            String ret = Naming.javaType(b.signature().returns(), false);
+            sb.append("    ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
+                    .append(boundaryOpParams(b)).append(");\n\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.2 — human client seam ({@code src/main/java/app/boundary/{Ext}Client.java},
+     * writeIfAbsent): {@code {Ext}} arayüzünü implemente eder; her metot birebir marker fırlatır
+     * ({@code "{Ext}.{op}: doldurulacak"}).
+     */
+    private static String boundaryClientJava(ExternalJson ext) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.boundary;\n\n");
+        String stdImports = boundaryOpImports(ext.operations());
+        if (!stdImports.isEmpty()) {
+            sb.append(stdImports).append('\n');
+        }
+        sb.append("// ").append(ext.name())
+                .append(" dış-adapter (transport impl) — insan/LLM doldurur. gen ezmez (writeIfAbsent).\n");
+        sb.append("public class ").append(ext.name()).append("Client implements ").append(ext.name())
+                .append(" {\n\n");
+        for (BoundaryOpJson b : ext.operations()) {
+            String ret = Naming.javaType(b.signature().returns(), false);
+            sb.append("    @Override\n");
+            sb.append("    public ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
+                    .append(boundaryOpParams(b)).append(") {\n");
+            sb.append("        throw new UnsupportedOperationException(\"").append(ext.name()).append('.')
+                    .append(b.id()).append(": doldurulacak\");\n");
+            sb.append("    }\n\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.3 — caller-side boundary validation ({@code {pkg}/{owner}{OpPascal}Validation.java}):
+     * boundary-op'ta validation varsa {@code validation{i}({tipli input record})} (tip çözümü
+     * boundary-op signature paramlarından, T3.5 renderer). {@code owner} = external/uncharted adı;
+     * external ve uncharted ops'ları için ortak (referans §1 {@code BoundaryValidation} paritesi).
+     * validation boş/null ise {@code null} (dosya emit edilmez).
+     */
+    private static String boundaryValidationJava(String pkg, String owner, BoundaryOpJson b, BuildReport report) {
+        List<GuardedExpr> validation = b.validation();
+        if (validation == null || validation.isEmpty()) {
+            return null;
+        }
+        String clsName = owner + Naming.pascal(b.id()) + "Validation";
+        String key = owner + "." + b.id();
+        Function<List<String>, String> resolveType = path -> {
+            for (ParamJson p : b.signature().params()) {
+                if (p.name().equals(path.get(0))) {
+                    return p.type();
+                }
+            }
+            return null;
+        };
+        List<String> methods = new ArrayList<>();
+        List<String> records = new ArrayList<>();
+        ImportFlags imports = new ImportFlags();
+        int ok = 0;
+        for (int i = 0; i < validation.size(); i++) {
+            GuardedExpr g = validation.get(i);
+            String inputName = clsName + i + "Input";
+            try {
+                ExprWalk.Result<String> res = JavaPredicateRenderer.render(g.ast(), resolveType);
+                Map<String, String> hints = ExprWalk.inferLiteralTypes(g.ast());
+                List<String> fields = new ArrayList<>();
+                for (List<String> path : res.paths()) {
+                    String type = JavaPredicateRenderer.javaFieldType(path, resolveType, hints);
+                    imports.note(type);
+                    fields.add(type + " " + ExprWalk.propName(path));
+                }
+                imports.noteExpr(res.expr());
+                methods.add("    public static boolean validation" + i + "(" + inputName + " input) {\n"
+                        + "        return " + res.expr() + ";\n    }\n\n");
+                records.add("    public record " + inputName + "(" + String.join(", ", fields) + ") {\n    }\n\n");
+                ok++;
+            } catch (UnsupportedConstruct e) {
+                report.unsupported("validation", key + "#Validation" + i, e.getMessage());
+                methods.add("    public static boolean validation" + i + "() {\n"
+                        + "        throw new UnsupportedOperationException(\"unsupported: "
+                        + escapeJava(g.text()) + "\");\n    }\n\n");
+            }
+        }
+        if (ok > 0) {
+            report.realized("validation", key);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(pkg).append(";\n\n");
+        sb.append(imports.render());
+        sb.append("// caller-side validation (INV-4): ").append(key).append(" çağrılmadan önce doğrulanır.\n");
+        sb.append("public final class ").append(clsName).append(" {\n\n");
+        sb.append("    private ").append(clsName).append("() {\n    }\n\n");
+        for (String m : methods) {
+            sb.append(m);
+        }
+        for (String r : records) {
+            sb.append(r);
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    // ── Uncharted (T4.4; SPEC §6.3 Uncharted/{Name}.g.cs satırı; referans §1 `:1017-1071`) — external
+    // gibi çağrı-adapter STUB (gen-owned, human seam DEĞİL — .NET paritesi) AMA kendi entity/type'larını
+    // OWN eder (düz POJO — JPA'ya bağlanmaz). ──
+
+    /**
+     * Step 5.4 — {@code gen/java/app/uncharted/{Name}.java}: stub {@code {Name}} arayüzü +
+     * (paket-özel) {@code {Name}StubClient} (UnsupportedOperationException; "doldurulacak" YOK —
+     * gen-owned WriteAlways, human seam DEĞİL). {@code realized("uncharted", name)} +
+     * boundary-op/serving alt-kayıtları (census şablonu {@link techgen.core.report.Completeness}
+     * ile birebir); validation ayrı dosyada ({@link #boundaryValidationJava}).
+     */
+    private static String unchartedFile(UnchartedJson u, BuildReport report) {
+        report.realized("uncharted", u.name());
+        report.policy("uncharted-realization", "call-adapter stub + owned model (generator-policy)");
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.uncharted;\n\n");
+        String stdImports = boundaryOpImports(u.operations());
+        if (!stdImports.isEmpty()) {
+            sb.append(stdImports).append('\n');
+        }
+        sb.append("// uncharted '").append(u.name())
+                .append("' (generated:false): çağrı-adapter STUB + OWNED model (entity/type korunur).\n");
+        if (u.deployable() != null) {
+            sb.append("// deployable: ").append(u.deployable()).append('\n');
+        }
+        sb.append('\n');
+        sb.append("public interface ").append(u.name()).append(" {\n\n");
+        for (BoundaryOpJson b : u.operations()) {
+            report.realized("boundary-op", u.name() + "." + b.id());
+            for (ServingJson s : b.serving() == null ? List.<ServingJson>of() : b.serving()) {
+                report.realized("serving", u.name() + "." + b.id() + ":" + s.protocol());
+                sb.append("    // serving: ").append(s.raw()).append(" — transport client sorumluluğu\n");
+            }
+            String ret = Naming.javaType(b.signature().returns(), false);
+            sb.append("    ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
+                    .append(boundaryOpParams(b)).append(");\n\n");
+        }
+        sb.append("}\n\n");
+        sb.append("// altyapı stub — human-seam DEĞİL (gen-owned, WriteAlways); çağrı-adapter henüz eklenmedi.\n");
+        sb.append("final class ").append(u.name()).append("StubClient implements ").append(u.name())
+                .append(" {\n\n");
+        for (BoundaryOpJson b : u.operations()) {
+            String ret = Naming.javaType(b.signature().returns(), false);
+            sb.append("    @Override\n");
+            sb.append("    public ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
+                    .append(boundaryOpParams(b)).append(") {\n");
+            sb.append("        throw new UnsupportedOperationException(\"").append(u.name()).append('.')
+                    .append(b.id()).append(": uncharted stub — çağrı-adapter henüz eklenmedi\");\n");
+            sb.append("    }\n\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.4 — OWNED entity POJO ({@code gen/java/app/uncharted/{Name}{Entity}.java}): düz sınıf
+     * (JPA'ya BAĞLANMAZ — {@code @Entity} yok). optimistic concurrency → plain {@code version} alanı
+     * ({@code @Version} YOK) + {@code realized("concurrency", "{Name}.{Entity}")}.
+     */
+    private static String unchartedEntityJava(UnchartedJson u, UnchartedEntity e, BuildReport report) {
+        boolean optimistic = "optimistic".equals(e.concurrency());
+        String clsName = u.name() + e.id();
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.uncharted;\n\n");
+        String imports = entityFieldImports(e.fields());
+        sb.append(imports);
+        if (!imports.isEmpty()) {
+            sb.append('\n');
+        }
+        sb.append("// uncharted owned POJO (").append(u.name()).append('.').append(e.id())
+                .append("): JPA'ya BAĞLANMAZ (persist sorumluluğu bizde değil).\n");
+        sb.append("public class ").append(clsName).append(" {\n\n");
+        for (EntityFieldJson f : e.fields()) {
+            sb.append("    private ").append(Naming.javaType(f.type(), f.collection())).append(' ')
+                    .append(Naming.camel(f.name())).append(";\n\n");
+        }
+        if (optimistic) {
+            report.realized("concurrency", u.name() + "." + e.id());
+            sb.append("    private long version;\n\n");
+        }
+        for (EntityFieldJson f : e.fields()) {
+            appendAccessors(sb, Naming.javaType(f.type(), f.collection()), Naming.camel(f.name()));
+        }
+        if (optimistic) {
+            appendAccessors(sb, "long", "version");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.4 — OWNED type POJO ({@code gen/java/app/uncharted/{Name}{TypeId}.java}): enum → Java
+     * {@code enum}; diğer kind → düz {@code record} (census'ta ayrı iz gerektirmez — referans §1
+     * uncharted disposition'ı yalnız uncharted/boundary-op/validation/serving/concurrency izler).
+     */
+    private static String unchartedTypeJava(UnchartedJson u, UnchartedType t) {
+        String clsName = u.name() + t.id();
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app.uncharted;\n\n");
+        if ("enum".equals(t.kind())) {
+            List<String> values = t.values() == null ? List.of() : t.values();
+            sb.append("// uncharted owned POJO (").append(u.name()).append('.').append(t.id()).append(").\n");
+            sb.append("public enum ").append(clsName).append(" { ").append(String.join(", ", values))
+                    .append(" }\n");
+            return sb.toString();
+        }
+        List<FieldJson> fields = t.fields() == null ? List.of() : t.fields();
+        String imports = typeFieldImports(fields);
+        String components = fields.stream()
+                .map(f -> Naming.javaType(f.type(), f.collection()) + " " + Naming.camel(f.name()))
+                .collect(Collectors.joining(", "));
+        sb.append(imports);
+        if (!imports.isEmpty()) {
+            sb.append('\n');
+        }
+        sb.append("// uncharted owned POJO (").append(u.name()).append('.').append(t.id()).append(").\n");
+        sb.append("public record ").append(clsName).append('(').append(components).append(") {\n}\n");
         return sb.toString();
     }
 }

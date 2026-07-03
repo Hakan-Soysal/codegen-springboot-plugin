@@ -139,7 +139,9 @@ class SubscriptionEmitTest {
         String content = read(outDir, "gen/java/app/billing/createinvoice/CreateInvoiceHandlerBase.java");
         assertTrue(content.contains("import app.EventBus;"));
         assertTrue(content.contains("protected final EventBus eventBus;"));
-        assertTrue(content.contains("EventBus eventBus)"), "ctor param eksik");
+        // T4.4 — CreateInvoice→PaymentGateway callEdge (kind=external, fixture): boundary client EN
+        // SONA eklenir (ctor-senkron; M4 kuralı) — EventBus artık ctor'da SON param DEĞİL.
+        assertTrue(content.contains("EventBus eventBus, PaymentGateway paymentGateway)"), "ctor param eksik");
         assertTrue(content.contains("emits: InvoiceCreated"), "Javadoc/yorum emit listesini içermeli");
     }
 
@@ -194,8 +196,11 @@ class SubscriptionEmitTest {
         List<String> wiringArgs = extractParamNames(wiringReturnLine.replace("return new CreateInvoiceHandler(",
                 "x("));
 
-        List<String> expected = List.of("invoiceRepository", "idempotencyStore", "eventBus");
-        assertEquals(expected, handlerBaseParams, "HandlerBase ctor sırası: repos -> idempotent -> events");
+        // T4.4 — CreateInvoice→PaymentGateway callEdge (kind=external, fixture): boundary client EN
+        // SONA eklenir (ctor-senkron; M4 kuralı: repos -> idempotent -> events -> boundary).
+        List<String> expected = List.of("invoiceRepository", "idempotencyStore", "eventBus", "paymentGateway");
+        assertEquals(expected, handlerBaseParams,
+                "HandlerBase ctor sırası: repos -> idempotent -> events -> boundary");
         assertEquals(expected, humanCtorParams, "human Handler ctor param sırası HandlerBase ile AYNI olmalı");
         assertEquals(expected, superArgs, "human Handler super() arg sırası HandlerBase ile AYNI olmalı");
         assertEquals(expected, wiringParams, "Wiring bean param sırası HandlerBase ile AYNI olmalı");

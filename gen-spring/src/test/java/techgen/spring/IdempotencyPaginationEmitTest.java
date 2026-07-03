@@ -62,7 +62,10 @@ class IdempotencyPaginationEmitTest {
         assertTrue(content.contains("public static final List<String> IDEMPOTENCY_KEYS = List.of(\"customerId\");"));
         // T4.2 — CreateInvoice emits=["InvoiceCreated"] (fixture): EventBus idempotent'ten SONRA eklenir
         // (ctor-senkron; M4 kuralı) — IdempotencyStore artık ctor'da SON param DEĞİL.
-        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus)"), "ctor param eksik");
+        // T4.4 — CreateInvoice→PaymentGateway callEdge (kind=external, fixture): boundary client EN
+        // SONA eklenir.
+        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus, "
+                + "PaymentGateway paymentGateway)"), "ctor param eksik");
 
         assertTrue(report.entries().stream()
                 .anyMatch(e -> e.construct().equals("idempotent") && e.id().equals("CreateInvoice")));
@@ -78,7 +81,9 @@ class IdempotencyPaginationEmitTest {
         assertTrue(content.contains("import app.IdempotencyStore;"));
         assertTrue(content.contains("public CreateInvoiceHandler("));
         // T4.2 — EventBus idempotent'ten SONRA eklenir (ctor-senkron; M4 kuralı).
-        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus) {"));
+        // T4.4 — boundary client EN SONA eklenir (ctor-senkron; M4 kuralı).
+        assertTrue(content.contains(
+                "IdempotencyStore idempotencyStore, EventBus eventBus, PaymentGateway paymentGateway) {"));
         assertTrue(content.contains("super("), "super çağrısı eksik");
     }
 
@@ -114,9 +119,12 @@ class IdempotencyPaginationEmitTest {
         assertTrue(content.contains("import app.IdempotencyStore;"));
         assertTrue(content.contains("public CreateInvoiceHandler createInvoiceHandler("));
         // T4.2 — EventBus idempotent'ten SONRA eklenir (ctor-senkron; M4 kuralı).
-        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus) {"));
+        // T4.4 — boundary client EN SONA eklenir (ctor-senkron; M4 kuralı).
         assertTrue(content.contains(
-                "return new CreateInvoiceHandler(invoiceRepository, idempotencyStore, eventBus);"));
+                "IdempotencyStore idempotencyStore, EventBus eventBus, PaymentGateway paymentGateway) {"));
+        assertTrue(content.contains(
+                "return new CreateInvoiceHandler(invoiceRepository, idempotencyStore, eventBus, "
+                        + "paymentGateway);"));
     }
 
     // ── Pagination: ListInvoices strategy=cursor, keys=[createdAt desc], size=20 ─────────────────
