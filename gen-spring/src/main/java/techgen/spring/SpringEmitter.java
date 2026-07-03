@@ -80,6 +80,11 @@ public final class SpringEmitter {
         if (!gm.events().isEmpty()) {
             writer.writeAlways("gen/java/app/EventBus.java", eventBusJava());
         }
+        // T4.1 — herhangi op idempotent!=null ise IdempotencyStore seam'i (referans §1 Idempotency.g.cs).
+        boolean anyIdempotent = gm.operations().stream().anyMatch(o -> o.op().idempotent() != null);
+        if (anyIdempotent) {
+            writer.writeAlways("gen/java/app/IdempotencyStore.java", idempotencyStoreJava());
+        }
 
         // ── PersistenceConfig (T3.4 §5.2; SPEC §6.3 AppDbContext.g.cs satırı) — yalnız entities>0 ──
         if (!gm.entities().isEmpty()) {
@@ -161,7 +166,11 @@ public final class SpringEmitter {
                 String genSliceDir = "gen/java/app/" + pkg + "/" + opSlug;
                 String humanSliceDir = "src/main/java/app/" + pkg + "/" + opSlug;
                 String reqName = opId + (op.isCommand() ? "Command" : "Query");
-                String retType = Naming.javaType(op.op().signature().returns(), false);
+                String baseRetType = Naming.javaType(op.op().signature().returns(), false);
+                boolean paginated = op.op().pagination() != null;
+                // pagination varsa dönüş tipi Result<Page<{Ret}>> (T4.1; referans §1/§7 "pagination").
+                String retType = paginated ? "Page<" + baseRetType + ">" : baseRetType;
+                boolean idempotent = op.op().idempotent() != null;
                 List<RepoDep> deps = repoDeps(op, gm);
 
                 // Step 5.1 — request record.
@@ -189,10 +198,21 @@ public final class SpringEmitter {
                 }
 
                 // Step 5.5 — Wiring bean kayıtları (TAM-AÇIK KAYIT, SPEC §12/4) biriktir.
-                String depParams = deps.stream()
-                        .map(d -> d.entityId() + "Repository " + d.fieldName())
-                        .collect(Collectors.joining(", "));
-                String depArgs = deps.stream().map(RepoDep::fieldName).collect(Collectors.joining(", "));
+                List<String> depParamList = new ArrayList<>();
+                List<String> depArgList = new ArrayList<>();
+                for (RepoDep d : deps) {
+                    depParamList.add(d.entityId() + "Repository " + d.fieldName());
+                    depArgList.add(d.fieldName());
+                }
+                // T4.1 — idempotent op: {op}Handler bean'i ayrıca IdempotencyStore alır (ctor-senkron;
+                // bean GeneratedBootstrap'ta EXPLICIT @Bean — Spring context-genelinde çözülür).
+                if (idempotent) {
+                    depParamList.add("IdempotencyStore idempotencyStore");
+                    depArgList.add("idempotencyStore");
+                    wiringImports.add("import app.IdempotencyStore;");
+                }
+                String depParams = String.join(", ", depParamList);
+                String depArgs = String.join(", ", depArgList);
                 for (RepoDep d : deps) {
                     if (!d.module().equals(module.name())) {
                         wiringImports.add("import app." + Naming.packageOf(d.module()) + "." + d.entityId()
@@ -454,7 +474,11 @@ public final class SpringEmitter {
         }
         // events>0 → EventBus bean kaydı (.NET Bootstrap.g.cs `AddScoped<IEventBus, OutboxEventBus>` paritesi).
         boolean eventBusBean = !gm.events().isEmpty();
-        String beanImport = eventBusBean ? "import org.springframework.context.annotation.Bean;\n" : "";
+        // T4.1 — herhangi op idempotent!=null → IdempotencyStore EXPLICIT @Bean (component-scan YOK,
+        // tasks/_uyumluluk-raporu-2026-07-03.md §7 bağlayıcı; dedup-store=in-memory).
+        boolean idempotencyStoreBean = gm.operations().stream().anyMatch(o -> o.op().idempotent() != null);
+        String beanImport = (eventBusBean || idempotencyStoreBean)
+                ? "import org.springframework.context.annotation.Bean;\n" : "";
         String eventBusMethod = eventBusBean
                 ? """
 
@@ -464,6 +488,16 @@ public final class SpringEmitter {
                         }
                     """
                 : "";
+        String idempotencyStoreMethod = idempotencyStoreBean
+                ? """
+
+                        @Bean
+                        public IdempotencyStore idempotencyStore() {
+                            return new InMemoryIdempotencyStore();
+                        }
+                    """
+                : "";
+        eventBusMethod = eventBusMethod + idempotencyStoreMethod;
         return """
                 package app;
 
@@ -642,6 +676,24 @@ public final class SpringEmitter {
         String stdImports = paramImports(javaTypes);
         String customImportsBlock = String.join("", customImports);
 
+        // T4.1 — pagination varsa istek kayda opak cursor (veya offset) + size eklenir (referans §1 Page;
+        // .NET RequestFields paritesi — kodlama = generator-policy, §8).
+        var pg = o.pagination();
+        String pageComment = "";
+        if (pg != null) {
+            if ("offset".equals(pg.strategy())) {
+                components.add("Integer offset");
+            } else {
+                components.add("String cursor");
+            }
+            components.add("int size");
+            String keys = pg.keys().stream()
+                    .map(k -> Naming.pascal(k.field()) + " " + k.direction())
+                    .collect(Collectors.joining(", "));
+            pageComment = "// pagination: " + pg.strategy() + " (size=" + (pg.size() == null ? "—" : pg.size())
+                    + ") ORDER BY " + keys + " (keyset/offset + cursor-token = generator-policy)\n";
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(slicePkg).append(";\n\n");
         sb.append(stdImports);
@@ -649,6 +701,7 @@ public final class SpringEmitter {
         if (!stdImports.isEmpty() || !customImportsBlock.isEmpty()) {
             sb.append('\n');
         }
+        sb.append(pageComment);
         sb.append("// visibility: ").append(o.visibility()).append('\n');
         if (o.note() != null) {
             sb.append("/**\n * ").append(escapeJavadoc(o.note())).append("\n */\n");
@@ -672,11 +725,19 @@ public final class SpringEmitter {
             String retType, List<RepoDep> deps, BuildReport report) {
         String opId = op.id();
         OperationJson o = op.op();
+        boolean idempotent = o.idempotent() != null;
+        boolean paginated = o.pagination() != null;
         StringBuilder imports = new StringBuilder("import app.Result;\n");
         String retImport = customTypeImport(o.signature().returns(), gm);
         imports.append(repoImportsBlock(deps));
         if (retImport != null) {
             imports.append(retImport);
+        }
+        if (idempotent) {
+            imports.append("import app.IdempotencyStore;\n");
+        }
+        if (paginated) {
+            imports.append("import app.Page;\n");
         }
 
         StringBuilder fields = new StringBuilder();
@@ -688,6 +749,12 @@ public final class SpringEmitter {
             ctorParams.add(d.entityId() + "Repository " + d.fieldName());
             ctorAssigns.append("        this.").append(d.fieldName()).append(" = ").append(d.fieldName())
                     .append(";\n");
+        }
+        // T4.1 — idempotent op: DI'a IdempotencyStore eklenir (ctor-senkron; Wiring bean çağrısı da günceldir).
+        if (idempotent) {
+            fields.append("    protected final IdempotencyStore idempotencyStore;\n");
+            ctorParams.add("IdempotencyStore idempotencyStore");
+            ctorAssigns.append("        this.idempotencyStore = idempotencyStore;\n");
         }
 
         // T3.7 — Auth (roles/scopes/ownership varsa).
@@ -702,9 +769,13 @@ public final class SpringEmitter {
         // T3.7 — Ext (op.ext() varsa): prelude + tanınan sabitler + (@http varsa) http-binding policy.
         String extSection = extFields(op, report);
 
+        // T4.1 — Idempotency (idempotent!=null) + Pagination (pagination!=null) (referans §1 Idem/Page + §7).
+        String idempotencySection = idempotencyFields(o, opId, report);
+        String paginationSection = paginationFields(o, opId, report);
+
         // T3.7 ek importları — ordinal-sorted (TreeSet), dedup (aynı Result alt-tipi birden fazla throws'ta olabilir).
         Set<String> extraImports = new TreeSet<>();
-        if (!authSection.isEmpty()) {
+        if (!authSection.isEmpty() || !idempotencySection.isEmpty()) {
             extraImports.add("import java.util.List;\n");
         }
         if (throwsBlock != null) {
@@ -737,6 +808,8 @@ public final class SpringEmitter {
         }
         sb.append(consistencySection);
         sb.append(extSection);
+        sb.append(idempotencySection);
+        sb.append(paginationSection);
         sb.append("    protected ").append(opId).append("HandlerBase(").append(String.join(", ", ctorParams))
                 .append(") {\n");
         sb.append(ctorAssigns);
@@ -977,21 +1050,84 @@ public final class SpringEmitter {
     }
 
     /**
+     * T4.1 — Idempotency bölümü (referans §1 {@code Idem}/{@code Idempotency.g.cs} + §7) —
+     * {@code op.idempotent()!=null}. {@code IDEMPOTENCY_KEYS} dedup anahtarları; dedup-store =
+     * §8 policy (in-memory; {@link #idempotencyStoreJava()}).
+     */
+    private static String idempotencyFields(OperationJson o, String opId, BuildReport report) {
+        var idem = o.idempotent();
+        if (idem == null) {
+            return "";
+        }
+        report.realized("idempotent", opId);
+        report.policy("dedup-store", "in-memory (generator-policy)");
+        String keys = idem.keys().stream().map(k -> "\"" + escapeJava(k) + "\"").collect(Collectors.joining(", "));
+        StringBuilder sb = new StringBuilder();
+        sb.append("    // idempotency: dedup anahtarları (dedup-store = §8 policy).\n");
+        sb.append("    public static final List<String> IDEMPOTENCY_KEYS = List.of(").append(keys).append(");\n\n");
+        return sb.toString();
+    }
+
+    /**
+     * T4.1 — Pagination bölümü (referans §1 {@code Page}/{@code {Op}.Page.g.cs} + §7) —
+     * {@code op.pagination()!=null}. {@code PAGINATION_STRATEGY} + (size deklare edildiyse)
+     * {@code DEFAULT_PAGE_SIZE}; dönüş tipi {@code Result<Page<{Ret}>>} çağıran tarafta (retType).
+     * {@code cursor-token=opaque} policy — kodlama = generator-policy.
+     */
+    private static String paginationFields(OperationJson o, String opId, BuildReport report) {
+        var pg = o.pagination();
+        if (pg == null) {
+            return "";
+        }
+        report.realized("pagination", opId);
+        report.policy("pagination-strategy", pg.strategy() + " (generator-policy)");
+        report.policy("cursor-token", "opaque (generator-policy)");
+        StringBuilder sb = new StringBuilder();
+        sb.append("    // pagination: strategy + declared size (keyset/offset uygulaması + cursor-token = §8 policy).\n");
+        sb.append("    public static final String PAGINATION_STRATEGY = \"").append(escapeJava(pg.strategy()))
+                .append("\";\n");
+        if (pg.size() != null) {
+            sb.append("    public static final int DEFAULT_PAGE_SIZE = ").append(pg.size()).append(";\n");
+        }
+        sb.append('\n');
+        return sb.toString();
+    }
+
+    /**
      * Step 5.3 — human seam ({@code {Op}Handler}, writeIfAbsent): HandlerBase'i extend eder;
      * {@code execute} gövdesi birebir marker fırlatır (skill tespiti substring {@code doldurulacak}).
      */
     private static String humanHandlerJava(GmOperation op, GenerationModel gm, String slicePkg, String reqName,
             String retType, List<RepoDep> deps) {
         String opId = op.id();
+        OperationJson o = op.op();
+        boolean idempotent = o.idempotent() != null;
+        boolean paginated = o.pagination() != null;
         StringBuilder imports = new StringBuilder("import app.Result;\n");
-        String retImport = customTypeImport(op.op().signature().returns(), gm);
+        String retImport = customTypeImport(o.signature().returns(), gm);
         imports.append(repoImportsBlock(deps));
         if (retImport != null) {
             imports.append(retImport);
         }
-        String ctorParams = deps.stream().map(d -> d.entityId() + "Repository " + d.fieldName())
-                .collect(Collectors.joining(", "));
-        String superArgs = deps.stream().map(RepoDep::fieldName).collect(Collectors.joining(", "));
+        if (idempotent) {
+            imports.append("import app.IdempotencyStore;\n");
+        }
+        if (paginated) {
+            imports.append("import app.Page;\n");
+        }
+        List<String> ctorParamList = new ArrayList<>();
+        List<String> superArgList = new ArrayList<>();
+        for (RepoDep d : deps) {
+            ctorParamList.add(d.entityId() + "Repository " + d.fieldName());
+            superArgList.add(d.fieldName());
+        }
+        // T4.1 — ctor-senkron: HandlerBase idempotent op'ta IdempotencyStore alıyorsa human seam de aynısını iletir.
+        if (idempotent) {
+            ctorParamList.add("IdempotencyStore idempotencyStore");
+            superArgList.add("idempotencyStore");
+        }
+        String ctorParams = String.join(", ", ctorParamList);
+        String superArgs = String.join(", ", superArgList);
 
         return """
                 package %s;
@@ -1056,6 +1192,22 @@ public final class SpringEmitter {
                         methodParams.add("@RequestParam " + javaType + " " + camel);
                     }
                     ctorArgs.add(camel);
+                }
+                // T4.1 — pagination varsa GET route'una opak cursor (veya offset) + size query paramları
+                // eklenir (.NET MapLine paritesi; cursor-token kodlaması = generator-policy §8).
+                var pg = o.pagination();
+                if (pg != null) {
+                    annotationImports.add("RequestParam");
+                    if ("offset".equals(pg.strategy())) {
+                        methodParams.add("@RequestParam(required = false) Integer offset");
+                        ctorArgs.add("offset");
+                    } else {
+                        methodParams.add("@RequestParam(required = false) String cursor");
+                        ctorArgs.add("cursor");
+                    }
+                    String sizeDefault = pg.size() == null ? "20" : String.valueOf(pg.size());
+                    methodParams.add("@RequestParam(defaultValue = \"" + sizeDefault + "\") int size");
+                    ctorArgs.add("size");
                 }
                 methods.append("    public ResponseEntity<?> ").append(methodName).append('(')
                         .append(String.join(", ", methodParams)).append(") {\n");
@@ -1784,6 +1936,34 @@ public final class SpringEmitter {
                     @Override
                     public void publish(Object event) {
                         throw new UnsupportedOperationException("outbox: event taşıma altyapısı henüz eklenmedi");
+                    }
+                }
+                """;
+    }
+
+    // ── IdempotencyStore (root, herhangi op idempotent!=null): dedup seam + in-memory altyapı
+    // (T4.1; referans §1 `:1073-1089` Idempotency.g.cs; policy dedup-store=in-memory). Bean kaydı
+    // GeneratedBootstrap'ta EXPLICIT @Bean (SPEC §12/4 tam-açık kayıt; component-scan YOK). ──
+
+    private static String idempotencyStoreJava() {
+        return """
+                package app;
+
+                import java.util.concurrent.ConcurrentHashMap;
+
+                // dedup seam'i: idempotent op'lar ilk çağrıda tryBegin(key)=true alır, tekrar denemede false
+                // (dedup-store = §8 policy).
+                public interface IdempotencyStore {
+                    boolean tryBegin(String key);
+                }
+
+                // altyapı stub — human-seam DEĞİL (gen-owned, WriteAlways); dedup-store=in-memory (generator-policy).
+                final class InMemoryIdempotencyStore implements IdempotencyStore {
+                    private final ConcurrentHashMap<String, Boolean> seen = new ConcurrentHashMap<>();
+
+                    @Override
+                    public boolean tryBegin(String key) {
+                        return seen.putIfAbsent(key, Boolean.TRUE) == null;
                     }
                 }
                 """;

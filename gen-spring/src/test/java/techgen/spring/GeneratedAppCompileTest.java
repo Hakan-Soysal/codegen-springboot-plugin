@@ -115,7 +115,9 @@ class GeneratedAppCompileTest {
         assertTrue(content.contains("import app.billing.Invoice;"), "cross-package dönüş tipi import eksik");
         assertTrue(content.contains("public abstract class CreateInvoiceHandlerBase {"));
         assertTrue(content.contains("protected final InvoiceRepository invoiceRepository;"));
-        assertTrue(content.contains("protected CreateInvoiceHandlerBase(InvoiceRepository invoiceRepository) {"));
+        // T4.1 — CreateInvoice idempotent (fixture): ctor'a IdempotencyStore da eklenir (ctor-senkron).
+        assertTrue(content.contains(
+                "protected CreateInvoiceHandlerBase(InvoiceRepository invoiceRepository, IdempotencyStore idempotencyStore) {"));
         assertTrue(content.contains("public abstract Result<Invoice> execute(CreateInvoiceCommand request);"));
         assertTrue(content.contains("idempotency"), "kanonik-sıra Javadoc'u eksik");
         assertTrue(content.contains("authz"), "kanonik-sıra Javadoc'u eksik");
@@ -173,9 +175,13 @@ class GeneratedAppCompileTest {
         String billingWiring = read(outDir, "gen/java/app/billing/BillingWiring.java");
         assertTrue(billingWiring.contains("import app.billing.createinvoice.CreateInvoiceHandler;"));
         assertTrue(billingWiring.contains("import app.billing.createinvoice.CreateInvoiceEndpoint;"));
+        // T4.1 — CreateInvoice idempotent (fixture): bean param + ctor arg listesine IdempotencyStore
+        // eklenir (ctor-senkron; bean GeneratedBootstrap'ta EXPLICIT @Bean).
         assertTrue(billingWiring.contains(
-                "public CreateInvoiceHandler createInvoiceHandler(InvoiceRepository invoiceRepository) {"));
-        assertTrue(billingWiring.contains("return new CreateInvoiceHandler(invoiceRepository);"));
+                "public CreateInvoiceHandler createInvoiceHandler(InvoiceRepository invoiceRepository, "
+                        + "IdempotencyStore idempotencyStore) {"));
+        assertTrue(billingWiring.contains(
+                "return new CreateInvoiceHandler(invoiceRepository, idempotencyStore);"));
         assertTrue(billingWiring.contains(
                 "public CreateInvoiceEndpoint createInvoiceEndpoint(CreateInvoiceHandler h) {"));
         assertTrue(billingWiring.contains("return new CreateInvoiceEndpoint(h);"));
