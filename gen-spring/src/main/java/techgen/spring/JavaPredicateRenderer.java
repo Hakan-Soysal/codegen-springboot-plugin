@@ -2,6 +2,7 @@ package techgen.spring;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 import techgen.core.errors.UnsupportedConstruct;
@@ -36,6 +37,16 @@ public final class JavaPredicateRenderer implements ExprWalk.Render<JavaPredicat
     /** Render fragmanı: üretilen Java kod parçası + nötr tip (compareTo/equals/primitif kararı için). */
     public record Frag(String code, String type) {
     }
+
+    /**
+     * T6.3-FIX #3 — nötr manifest temporal tipleri ({@code Date}→{@code LocalDate},
+     * {@code DateTime}→{@code Instant}; {@link Naming#javaType}). C#'ta {@code DateTime} operatör-
+     * aşırıyüklemesiyle {@code >=}/{@code <=} doğal çözülür (CoreTemplate1 {@code ExprBuild} bu
+     * yüzden özel-durum içermez); Java'da {@code LocalDate}/{@code Instant} karşılaştırma operatörü
+     * DESTEKLEMEZ (derlenmez) — {@code Decimal} gibi {@code compareTo} formuna alınır (davranışsal
+     * parite: aynı karşılaştırma semantiği, dile-özgü render).
+     */
+    private static final Set<String> TEMPORAL = Set.of("Date", "DateTime");
 
     private final Function<List<String>, String> resolveType;
     private final Map<String, String> hints;
@@ -136,6 +147,7 @@ public final class JavaPredicateRenderer implements ExprWalk.Render<JavaPredicat
             return new Frag("(" + left.code() + " || " + right.code() + ")", "Bool");
         }
         boolean decimal = "Decimal".equals(left.type()) || "Decimal".equals(right.type());
+        boolean temporal = TEMPORAL.contains(left.type()) || TEMPORAL.contains(right.type());
         boolean string = "String".equals(left.type()) || "String".equals(right.type());
 
         if (isArith(nodeKind)) {
@@ -155,6 +167,11 @@ public final class JavaPredicateRenderer implements ExprWalk.Render<JavaPredicat
 
         // cmp
         if (decimal) {
+            String cop = isEq(op) ? "==" : op;
+            return new Frag("(" + left.code() + ".compareTo(" + right.code() + ") " + cop + " 0)", "Bool");
+        }
+        if (temporal) {
+            // LocalDate/Instant >=/<=/>/< DERLENMEZ (BigDecimal ile aynı gerekçe) — compareTo formu.
             String cop = isEq(op) ? "==" : op;
             return new Frag("(" + left.code() + ".compareTo(" + right.code() + ") " + cop + " 0)", "Bool");
         }

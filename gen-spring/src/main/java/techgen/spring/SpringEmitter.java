@@ -37,6 +37,7 @@ import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -185,7 +186,8 @@ public final class SpringEmitter {
                 if (!entity.module().equals(module.name())) {
                     continue;
                 }
-                writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + ".java", entityJava(entity, report));
+                writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + ".java",
+                        entityJava(entity, gm, report));
                 writer.writeAlways("gen/java/app/" + pkg + "/" + entity.id() + "Repository.java",
                         repositoryJava(entity));
 
@@ -766,6 +768,12 @@ public final class SpringEmitter {
 
     /** Bir manifest tip adı GM'de entity/type/event id'sine eşleşiyorsa cross-package import satırı; yoksa null. */
     private static String customTypeImport(String manifestType, GenerationModel gm) {
+        // T6.3-FIX #1 — Result<Unit> dönüşü: Unit kök "app" paketinde (unitRecordJava), op-slice
+        // paketinden (app.{module}.{op}) HER ZAMAN farklı → Result ile aynı şekilde cross-package
+        // import gerekir (manifest'te entity/type/event olarak tanımlı değil, built-in sentinel).
+        if ("Unit".equals(manifestType)) {
+            return "import app.Unit;\n";
+        }
         for (EntityJson e : gm.entities()) {
             if (e.id().equals(manifestType)) {
                 return "import app." + Naming.packageOf(e.module()) + "." + e.id() + ";\n";
@@ -1781,7 +1789,7 @@ public final class SpringEmitter {
     // Mutable sınıf (record DEĞİL — JPA @Version alanı setter ister). Field-level ext (T4.5 sweep
     // kapsamı, §5.4 dışı) ve invariants (T3.5) BURADA emit edilmez. ──
 
-    private static String entityJava(EntityJson entity, BuildReport report) {
+    private static String entityJava(EntityJson entity, GenerationModel gm, BuildReport report) {
         List<EntityFieldJson> fields = entity.fields();
         boolean hasId = fields.stream().anyMatch(f -> "id".equals(f.name()));
         boolean hasEnum = fields.stream().anyMatch(f -> "enum".equals(f.ref()));
@@ -1800,7 +1808,7 @@ public final class SpringEmitter {
         if (optimistic) {
             imports.append("import jakarta.persistence.Version;\n");
         }
-        imports.append(entityFieldImports(fields));
+        imports.append(entityFieldImports(fields, entity.module(), gm));
 
         StringBuilder sb = new StringBuilder();
         sb.append("package app.").append(Naming.packageOf(entity.module())).append(";\n\n");
@@ -1859,7 +1867,10 @@ public final class SpringEmitter {
         sb.append("    }\n\n");
     }
 
-    /** Entity alan tiplerine göre gereken import satırları ({@link #typeFieldImports} ile aynı sıra). */
+    /**
+     * {@code app.uncharted} owned-entity POJO'ları için (T4.5; kendi GM entity/module kavramı yok,
+     * sabit paket) — cross-module custom-type taraması YOK, yalnız java.* built-in import'lar.
+     */
     private static String entityFieldImports(List<EntityFieldJson> fields) {
         boolean bigDecimal = false;
         boolean instant = false;
@@ -1895,6 +1906,83 @@ public final class SpringEmitter {
             sb.append("import java.util.List;\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * Entity alan tiplerine göre gereken import satırları ({@link #typeFieldImports} ile aynı sıra).
+     * T6.3-FIX #2 — bir alan başka modülde tanımlı bir entity/type/enum'a (ör. {@code app.shared}
+     * paylaşılan enum'ları) referans veriyorsa cross-package import da eklenir (ordinal-distinct,
+     * alan görülme sırası; kendi modülü → aynı paket, import gerekmez).
+     */
+    private static String entityFieldImports(List<EntityFieldJson> fields, String ownerModule, GenerationModel gm) {
+        boolean bigDecimal = false;
+        boolean instant = false;
+        boolean localDate = false;
+        boolean duration = false;
+        boolean list = false;
+        for (EntityFieldJson f : fields) {
+            switch (Naming.javaType(f.type(), false)) {
+                case "BigDecimal" -> bigDecimal = true;
+                case "Instant" -> instant = true;
+                case "LocalDate" -> localDate = true;
+                case "Duration" -> duration = true;
+                default -> { }
+            }
+            if (f.collection()) {
+                list = true;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        if (bigDecimal) {
+            sb.append("import java.math.BigDecimal;\n");
+        }
+        if (instant) {
+            sb.append("import java.time.Instant;\n");
+        }
+        if (localDate) {
+            sb.append("import java.time.LocalDate;\n");
+        }
+        if (duration) {
+            sb.append("import java.time.Duration;\n");
+        }
+        if (list) {
+            sb.append("import java.util.List;\n");
+        }
+        Set<String> customImports = new LinkedHashSet<>();
+        for (EntityFieldJson f : fields) {
+            String custom = crossModuleTypeImport(f.type(), ownerModule, gm);
+            if (custom != null) {
+                customImports.add(custom);
+            }
+        }
+        for (String custom : customImports) {
+            sb.append(custom);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * {@link #customTypeImport}'un modül-duyarlı hali: manifest tipi GM'de entity/type/event id'sine
+     * eşleşiyor VE o tanımın modülü {@code ownerModule}'dan FARKLIYSA cross-package import satırı;
+     * aynı modülse (aynı Java paketi) veya eşleşme yoksa null.
+     */
+    private static String crossModuleTypeImport(String manifestType, String ownerModule, GenerationModel gm) {
+        for (EntityJson e : gm.entities()) {
+            if (e.id().equals(manifestType) && !e.module().equals(ownerModule)) {
+                return "import app." + Naming.packageOf(e.module()) + "." + e.id() + ";\n";
+            }
+        }
+        for (TypeJson t : gm.types()) {
+            if (t.id().equals(manifestType) && !t.module().equals(ownerModule)) {
+                return "import app." + Naming.packageOf(t.module()) + "." + t.id() + ";\n";
+            }
+        }
+        for (EventJson ev : gm.events()) {
+            if (ev.id().equals(manifestType) && !ev.module().equals(ownerModule)) {
+                return "import app." + Naming.packageOf(ev.module()) + "." + ev.id() + ";\n";
+            }
+        }
+        return null;
     }
 
     // ── Repository (T3.4 §5.2; SPEC §6.3 AppDbContext.g.cs satırı; referans §1 `:1189-1212`) —
@@ -2484,13 +2572,21 @@ public final class SpringEmitter {
     /** Bir boundary-op'un Java dönüş+param tiplerine göre gereken java.* import'ları ({@link #paramImports} sarmalı). */
     private static String boundaryOpImports(List<BoundaryOpJson> ops) {
         List<String> javaTypes = new ArrayList<>();
+        boolean unit = false;
         for (BoundaryOpJson b : ops) {
-            javaTypes.add(Naming.javaType(b.signature().returns(), false));
+            String retType = Naming.javaType(b.signature().returns(), false);
+            javaTypes.add(retType);
+            // T6.3-FIX #1 — boundary-op dönüşü Unit ise (app.boundary paketi, Unit kök "app"
+            // paketinde) cross-package import gerekir; HandlerBase'deki customTypeImport ile aynı köken.
+            if ("Unit".equals(retType)) {
+                unit = true;
+            }
             for (ParamJson p : b.signature().params()) {
                 javaTypes.add(Naming.javaType(p.type(), p.collection()));
             }
         }
-        return paramImports(javaTypes);
+        String imports = paramImports(javaTypes);
+        return unit ? "import app.Unit;\n" + imports : imports;
     }
 
     /** Boundary-op parametre listesi ({@code {JavaTip} {camelAd}, ...}). */
