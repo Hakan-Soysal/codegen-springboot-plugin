@@ -13,11 +13,70 @@
   <artifactId>conformance</artifactId>
   <packaging>jar</packaging>
 
+  <!-- Hafif çekirdek (T8.1 §5.1): spring-context + spring-beans (Spring Boot starter DEĞİL — app
+       classpath'i JPA/web autoconfig sınıflarını runner'ın izole child classloader'ından sağlar).
+       Sürümler kök pom'daki spring-boot-dependencies BOM import'undan gelir (root pom.xml notu). -->
   <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-beans</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- T8.2 acceptance testleri (§A.5): fixture manifest'ten gerçek bir app emit etmek için
+         gen-core (GmBuilder/Loader) + gen-spring (SpringEmitter/GenConfig) test-scope'ta —
+         referans AppFixture.cs'in Gen.Core/Gen.Dotnet doğrudan çağrısı karşılığı (CLI'ye bağımlı
+         DEĞİL). -->
+    <dependency>
+      <groupId>com.vennyx.techgen</groupId>
+      <artifactId>gen-core</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.vennyx.techgen</groupId>
+      <artifactId>gen-spring</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
+  <build>
+    <finalName>conformance</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.2</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>techgen.conformance.Main</mainClass>
+                </transformer>
+                <!-- Jackson (jackson-databind vb.) META-INF/services dosyaları merge edilmeli. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

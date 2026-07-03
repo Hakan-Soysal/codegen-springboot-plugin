@@ -79,3 +79,17 @@ sürümlerinin şu an güncel olmadığını gösteriyor (gerçek en güncel: Ja
 kök/gen-core `pom.xml` içindeki fiili bağımlılık sürümlerini değiştirmek bu task'ın kapsamında
 değil. Bu, PM/kullanıcıya bilgi amaçlı bir bulgu olarak raporlanır — gerekirse ayrı bir task ile
 güncellenmelidir.
+
+## T8.1 — Conformance: Spec DTO + SpecRunner + GeneratedApp bootstrap
+
+| Bileşen | Sürüm | Doğrulama kaynağı |
+|---|---|---|
+| spring-context / spring-beans (conformance modülü) | **Spring Boot 3.5.16 BOM'undan çözülür** (literal spring-context sürümü yok) | Kök `pom.xml`'e eklenen `spring-boot-dependencies:3.5.16` (scope=import) — YENİ sorgu YAPILMADI; bu, T0.2'de zaten Maven Central `maven-metadata.xml` ile doğrulanmış `Versions.SPRING_BOOT` (gen-spring) pinidir; conformance'ın Spring sürümü, üretilen app'in `spring-boot-starter-parent` sürümüyle KASITLI OLARAK aynı BOM'dan gelir (uyumluluk garantisi — instanceof/classloader paylaşımı için gerekli). |
+
+**Not:** `conformance/pom.xml` yalnız `spring-context`+`spring-beans` (hafif çekirdek; task §5.1 —
+`spring-boot-starter` DEĞİL) + mevcut `jackson-databind` (kök jackson-bom 2.22.0'dan) ekler.
+Kök `pom.xml`'de jackson-bom/junit-bom import'ları `spring-boot-dependencies` import'undan ÖNCE
+sıralanmıştır (Maven'de aynı GA için ilk `dependencyManagement` girdisi kazanır) — bu, T0.2'nin
+pinlediği Jackson/JUnit sürümlerinin `spring-boot-dependencies`'in kendi yönettiği (muhtemelen
+daha eski) Jackson/JUnit sürümleriyle EZİLMEDİĞİNİ garanti eder; `mvn test` (tüm reactor, 282 test)
+gerçek çalıştırmayla doğrulandı, sürüm çakışması gözlenmedi.
