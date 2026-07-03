@@ -6,17 +6,17 @@ _Son yeşil kök test: 225 (gen-core 104 + gen-spring 119 + gen-cli 1 + conforma
 
 ## ⚠️ /clear SONRASI İLK ADIMLAR
 
-1. Sağlık: Rule-7 JDK21 export ile kökten `mvn test` → exit 0 (~225 test). git HEAD son PM checkpoint (M4).
-2. SIRADAKI: M5 = T5.1 (GenConfig + CLI main + exit-code + shaded jar) — tek task, tam-format tasks/T5-1-cli.md. Uçtan uca CLI zinciri + INV-7 exit sözleşmesi + shaded jar.
-3. Sonra: M6 (T6.1 golden → T6.2∥T6.3 worktree) → M7 (T7.1) ∥ M8 (T8.1→T8.2 worktree, onaylı graf sapması) → M9 (T9.1 → T9.2∥T9.3) → M10 (T10.1).
+1. Sağlık: Rule-7 JDK21 export ile kökten `mvn test` → exit 0 (~231 test). git HEAD son PM checkpoint (M5, 8f0ab93).
+2. SIRADAKI: M6 = T6.1 (golden snapshot + characterization, tam-format tasks/T6-1-golden.md, in_progress) → sonra **T6.2∥T6.3 worktree penceresi** (onaylı paket): T6.2 (EmitTests portu) ana ağaç ∥ T6.3 (studyo/E2E) worktree. Golden'da rule 3 kritik (UPDATE_GOLDEN=1).
+3. Sonra: M7 (T7.1) ∥ M8 (T8.1→T8.2 worktree, onaylı graf sapması) → M9 (T9.1 → T9.2∥T9.3) → M10 (T10.1).
 
 ## Durum özeti
 
 | Milestone | Durum |
 |---|---|
-| M0, M1, M2, M3, M4 | ✅ PASS (milestone verifier dahil) |
-| M5 | T5.1 in_progress |
-| M6-M10 | bekliyor |
+| M0, M1, M2, M3, M4, M5 | ✅ PASS (milestone verifier dahil) |
+| M6 | T6.1 in_progress · T6.2/T6.3 pending (T6.2∥T6.3 worktree penceresi) |
+| M7-M10 | bekliyor |
 
 Retry-FAIL: 0 (tüm task ilk denemede PASS). T4.1'de reconcile YOK — T3.1'de bir reconcile (finishAndPrune imza) olmuştu.
 **Kritik başarı:** M4 sonunda fixture TAMAMEN 0 silentDrop — 43 farklı construct tipi realize, tam .NET paritesi. Üretilen Spring app 60 dosyayla derleniyor.
@@ -54,6 +54,8 @@ M4 commit zinciri: f0b798d(T4.1)→5177ceb(T4.2)→dd22844(T4.3)→4d8efeab(T4.4
 - **tasks/IMPLEMENTATION-PLAN.md T4.3 ~satır 245** 'realized(@trigger.{name})' — .NET paritesiyle çelişir (retired rule 9 ile çözüldü); belge düzeltilmeli.
 - Provenance `clazz` vs .NET `Class` — byte-eşit cross-runtime tüketici yok.
 - {ns}-realization policy açıklaması 'annotation/interceptor' vs .NET 'interceptor/attribute' — pinlenmemiş, benign.
+- **gen-cli/dependency-reduced-pom.xml** (maven-shade artefaktı) gitignore'da değil — .gitignore'a eklenmeli (M5 milestone verifier notu; commit'e girmedi, non-blocking).
+- **GmBuilder module-ref validasyonu** hem Java hem .NET'te YOK (T5.1 verifier teyit) — orphan-module→silent-drop beklenen davranış. İstenirse cross-generator koordineli tasarım kararı (T5.1 defekti değil).
 
 ## Executor/Verifier spawn deseni
 
