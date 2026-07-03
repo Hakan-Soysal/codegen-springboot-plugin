@@ -1,0 +1,238 @@
+{
+    "mode": "linked",
+    "contract": "./operations.json",
+    "meta": { "hasErrors": false, "errorCount": 0 },
+    "deployables": [
+        { "name": "BillingService", "units": ["Billing"] },
+        { "name": "OpsService", "units": ["Ops"], "ext": [ { "ns": "deploy", "name": "region", "args": { "zone": "eu" } } ] }
+    ],
+    "modules": [
+        { "name": "Billing", "pureTechnical": false },
+        { "name": "Ops", "pureTechnical": true, "ext": [ { "ns": "audit", "name": "module", "args": {} } ] }
+    ],
+    "operations": [
+        {
+            "id": "CreateInvoice",
+            "module": "Billing",
+            "visibility": "exposed",
+            "realizes": "biz.CreateInvoice",
+            "signature": {
+                "params": [
+                    { "name": "customerId", "type": "ID", "collection": false },
+                    { "name": "amount", "type": "Decimal", "collection": false }
+                ],
+                "returns": "Invoice"
+            },
+            "serving": [
+                { "protocol": "rest", "args": [{ "kind": "keyword", "value": "POST" }, { "kind": "string", "value": "/invoices" }], "raw": "@rest POST '/invoices'" },
+                { "protocol": "grpc", "args": [], "raw": "@grpc()" }
+            ],
+            "roles": ["Clerk"],
+            "ownership": null,
+            "access": { "reads": [], "creates": ["Invoice"], "updates": [], "deletes": [] },
+            "validation": [
+                { "text": "amount > 0", "ast": { "node": "cmp", "op": ">", "left": { "path": ["amount"] }, "right": { "kind": "number", "value": 0 } } }
+            ],
+            "rule": [
+                { "text": "amount <= creditLimit", "ast": { "node": "cmp", "op": "<=", "left": { "path": ["amount"] }, "right": { "path": ["resource", "creditLimit"] } } }
+            ],
+            "note": "Müşteri kredi limiti dış servisten gelir.",
+            "businessNote": null,
+            "edges": [],
+            "consistency": { "risk": "strong", "mode": null },
+            "abac": null,
+            "scopes": [],
+            "throws": ["DuplicateInvoice"],
+            "idempotent": { "keys": ["customerId"] },
+            "emits": ["InvoiceCreated"],
+            "pagination": null,
+            "ext": [
+                { "ns": "audit", "name": "logged", "args": { "category": "financial" } },
+                { "ns": "metric", "name": "emit", "args": { "name": "invoice_created", "kind": "counter" } }
+            ]
+        },
+        {
+            "id": "GetInvoice",
+            "module": "Billing",
+            "visibility": "exposed",
+            "realizes": null,
+            "signature": {
+                "params": [
+                    { "name": "id", "type": "ID", "collection": false },
+                    { "name": "includeVoid", "type": "Bool", "collection": false }
+                ],
+                "returns": "Invoice"
+            },
+            "serving": [
+                { "protocol": "rest", "args": [{ "kind": "keyword", "value": "GET" }, { "kind": "string", "value": "/invoices/{id}", "params": ["id"] }], "raw": "@rest GET '/invoices/{id}'" }
+            ],
+            "roles": ["Clerk"],
+            "ownership": null,
+            "access": { "reads": ["Invoice"], "creates": [], "updates": [], "deletes": [] },
+            "validation": [],
+            "rule": [],
+            "note": null,
+            "businessNote": null,
+            "edges": [],
+            "consistency": { "risk": "strong", "mode": null },
+            "abac": null,
+            "scopes": [],
+            "throws": [],
+            "idempotent": null,
+            "emits": [],
+            "pagination": null
+        },
+        {
+            "id": "ListInvoices",
+            "module": "Billing",
+            "visibility": "exposed",
+            "realizes": null,
+            "signature": {
+                "params": [],
+                "returns": "Invoice"
+            },
+            "serving": [
+                { "protocol": "rest", "args": [{ "kind": "keyword", "value": "GET" }, { "kind": "string", "value": "/invoices" }], "raw": "@rest GET '/invoices'" }
+            ],
+            "roles": ["Clerk"],
+            "ownership": null,
+            "access": { "reads": ["Invoice"], "creates": [], "updates": [], "deletes": [] },
+            "validation": [],
+            "rule": [],
+            "note": null,
+            "businessNote": null,
+            "edges": [],
+            "consistency": { "risk": "strong", "mode": null },
+            "abac": null,
+            "scopes": [],
+            "throws": [],
+            "idempotent": null,
+            "emits": [],
+            "pagination": { "strategy": "cursor", "keys": [{ "field": "createdAt", "direction": "desc" }], "size": 20 }
+        },
+        {
+            "id": "WriteAuditLog",
+            "module": "Ops",
+            "visibility": "internal",
+            "realizes": null,
+            "signature": {
+                "params": [
+                    { "name": "seq", "type": "Int", "collection": false, "ext": [ { "ns": "sensitivity", "name": "tag", "args": { "level": "low" } } ] },
+                    { "name": "tenant", "type": "String", "collection": false }
+                ],
+                "returns": "AuditLog"
+            },
+            "serving": [],
+            "roles": ["Auditor"],
+            "ownership": "own",
+            "access": { "reads": [], "creates": ["AuditLog"], "updates": [], "deletes": [] },
+            "validation": [
+                { "text": "seq > 0", "ast": { "node": "cmp", "op": ">", "left": { "path": ["seq"] }, "right": { "kind": "number", "value": 0 } }, "guardRef": "g-audit" }
+            ],
+            "rule": [],
+            "note": "Denetim kaydı yazar.",
+            "businessNote": null,
+            "edges": [],
+            "consistency": { "risk": "strong", "mode": "durable" },
+            "abac": { "permit": { "node": "cmp", "op": "=", "left": { "path": ["actor", "tenant"] }, "right": { "path": ["resource", "tenant"] } } },
+            "scopes": ["audit:write"],
+            "throws": [],
+            "idempotent": null,
+            "emits": [],
+            "pagination": null,
+            "ext": [
+                { "ns": "trigger", "name": "cron", "args": { "schedule": "0 0 * * *" } },
+                { "ns": "http", "name": "endpoint", "args": { "route": "/audit", "method": "POST" } },
+                { "ns": "audit", "name": "logged", "args": { "category": "sys" } }
+            ]
+        }
+    ],
+    "entities": [
+        {
+            "id": "Invoice",
+            "module": "Billing",
+            "realizes": ["biz.Invoice"],
+            "fields": [
+                { "name": "id", "type": "ID", "collection": false, "cardinality": "one", "ref": "scalar" },
+                { "name": "customerId", "type": "ID", "collection": false, "cardinality": "one", "ref": "scalar", "ext": [
+                    { "ns": "crypto", "name": "encrypted", "args": {} },
+                    { "ns": "sensitivity", "name": "tag", "args": { "level": "pii" } }
+                ] },
+                { "name": "amount", "type": "Decimal", "collection": false, "cardinality": "one", "ref": "scalar" },
+                { "name": "status", "type": "InvoiceStatus", "collection": false, "cardinality": "one", "ref": "enum" },
+                { "name": "createdAt", "type": "DateTime", "collection": false, "cardinality": "one", "ref": "scalar" }
+            ],
+            "invariants": [
+                { "text": "amount >= 0", "ast": { "node": "cmp", "op": ">=", "left": { "path": ["amount"] }, "right": { "kind": "number", "value": 0 } } }
+            ],
+            "concurrency": "optimistic"
+        },
+        {
+            "id": "AuditLog",
+            "module": "Ops",
+            "realizes": [],
+            "fields": [
+                { "name": "id", "type": "ID", "collection": false, "cardinality": "one", "ref": "scalar" },
+                { "name": "tenant", "type": "String", "collection": false, "cardinality": "one", "ref": "scalar" },
+                { "name": "seq", "type": "Int", "collection": false, "cardinality": "one", "ref": "scalar" },
+                { "name": "invoiceRef", "type": "ID", "collection": false, "cardinality": "one", "ref": "scalar", "sourceOfTruth": { "module": "Billing", "entity": "Invoice" } },
+                { "name": "note", "type": "String", "collection": false, "cardinality": "one", "ref": "scalar", "ext": [ { "ns": "sensitivity", "name": "tag", "args": { "level": "pii" } } ] }
+            ],
+            "invariants": [
+                { "text": "seq >= 0", "ast": { "node": "cmp", "op": ">=", "left": { "path": ["seq"] }, "right": { "kind": "number", "value": 0 } } }
+            ],
+            "concurrency": "optimistic",
+            "ext": [ { "ns": "audit", "name": "tracked", "args": {} } ]
+        }
+    ],
+    "types": [
+        { "id": "Money", "module": "Billing", "kind": "composite", "fields": [
+            { "name": "amount", "type": "Decimal", "collection": false },
+            { "name": "currency", "type": "String", "collection": false }
+        ] },
+        { "id": "InvoiceStatus", "module": "Billing", "kind": "enum", "values": ["Draft", "Issued", "Paid"] },
+        { "id": "AuditMeta", "module": "Ops", "kind": "composite", "fields": [
+            { "name": "source", "type": "String", "collection": false, "ext": [ { "ns": "sensitivity", "name": "tag", "args": {} } ] },
+            { "name": "labels", "type": "String", "collection": true }
+        ], "ext": [ { "ns": "schema", "name": "versioned", "args": {} } ] },
+        { "id": "AuditKind", "module": "Ops", "kind": "enum", "values": ["Read", "Write"] }
+    ],
+    "errors": [
+        { "id": "DuplicateInvoice", "module": "Billing", "resultType": "NotProcessable" }
+    ],
+    "events": [
+        { "id": "InvoiceCreated", "module": "Billing", "payload": [
+            { "name": "invoiceId", "type": "ID", "collection": false, "ext": [ { "ns": "sensitivity", "name": "tag", "args": { "level": "low" } } ] },
+            { "name": "amount", "type": "Money", "collection": false }
+        ] }
+    ],
+    "subscriptions": [
+        { "event": { "module": "Billing", "name": "InvoiceCreated" }, "consumer": { "module": "Ops", "op": "WriteAuditLog" } }
+    ],
+    "externals": [
+        { "name": "PaymentGateway", "generated": false, "operations": [
+            { "id": "charge",
+              "signature": { "params": [{ "name": "amount", "type": "Decimal", "collection": false, "ext": [ { "ns": "sensitivity", "name": "tag", "args": {} } ] }], "returns": "ID" },
+              "serving": [ { "protocol": "rest", "args": [], "raw": "@rest()" } ],
+              "validation": [ { "text": "amount > 0", "ast": { "node": "cmp", "op": ">", "left": { "path": ["amount"] }, "right": { "kind": "number", "value": 0 } } } ]
+            },
+            { "id": "refund", "signature": { "params": [{ "name": "chargeId", "type": "ID", "collection": false }], "returns": "Bool" } }
+        ] }
+    ],
+    "uncharted": [
+        { "name": "LegacyLedger", "generated": false, "deployable": "OpsService",
+          "operations": [ { "id": "post",
+            "signature": { "params": [{ "name": "amount", "type": "Decimal", "collection": false, "ext": [ { "ns": "ucparam", "name": "tag", "args": {} } ] }], "returns": "Bool" },
+            "serving": [ { "protocol": "rest", "args": [], "raw": "@rest()" } ],
+            "validation": [ { "text": "amount > 0.5", "ast": { "node": "cmp", "op": ">", "left": { "path": ["amount"] }, "right": { "kind": "number", "value": 0.5 } } } ]
+          } ],
+          "entities": [ { "id": "LedgerEntry", "realizes": [], "fields": [ { "name": "id", "type": "ID", "collection": false, "cardinality": "one", "ref": "scalar" } ], "concurrency": null } ],
+          "types": [ { "id": "LedgerKind", "kind": "enum", "values": ["Debit", "Credit"] } ]
+        }
+    ],
+    "callEdges": [
+        { "from": "CreateInvoice", "to": { "system": "PaymentGateway", "op": "charge" }, "kind": "external", "compensate": { "system": "PaymentGateway", "op": "refund" } },
+        { "from": "WriteAuditLog", "to": { "system": "LegacyLedger", "op": "post" }, "kind": "uncharted", "compensate": null }
+    ],
+    "coverage": { "unrealizedBusinessOps": [], "uncoveredEntities": [] }
+}
