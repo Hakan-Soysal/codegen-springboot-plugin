@@ -60,7 +60,9 @@ class IdempotencyPaginationEmitTest {
         assertTrue(content.contains("import app.IdempotencyStore;"), "IdempotencyStore import eksik");
         assertTrue(content.contains("protected final IdempotencyStore idempotencyStore;"), "DI alanı eksik");
         assertTrue(content.contains("public static final List<String> IDEMPOTENCY_KEYS = List.of(\"customerId\");"));
-        assertTrue(content.contains("IdempotencyStore idempotencyStore)"), "ctor param eksik");
+        // T4.2 — CreateInvoice emits=["InvoiceCreated"] (fixture): EventBus idempotent'ten SONRA eklenir
+        // (ctor-senkron; M4 kuralı) — IdempotencyStore artık ctor'da SON param DEĞİL.
+        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus)"), "ctor param eksik");
 
         assertTrue(report.entries().stream()
                 .anyMatch(e -> e.construct().equals("idempotent") && e.id().equals("CreateInvoice")));
@@ -75,7 +77,8 @@ class IdempotencyPaginationEmitTest {
         String content = read(outDir, "src/main/java/app/billing/createinvoice/CreateInvoiceHandler.java");
         assertTrue(content.contains("import app.IdempotencyStore;"));
         assertTrue(content.contains("public CreateInvoiceHandler("));
-        assertTrue(content.contains("IdempotencyStore idempotencyStore) {"));
+        // T4.2 — EventBus idempotent'ten SONRA eklenir (ctor-senkron; M4 kuralı).
+        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus) {"));
         assertTrue(content.contains("super("), "super çağrısı eksik");
     }
 
@@ -110,9 +113,10 @@ class IdempotencyPaginationEmitTest {
         String content = read(outDir, "gen/java/app/billing/BillingWiring.java");
         assertTrue(content.contains("import app.IdempotencyStore;"));
         assertTrue(content.contains("public CreateInvoiceHandler createInvoiceHandler("));
-        assertTrue(content.contains("IdempotencyStore idempotencyStore) {"));
+        // T4.2 — EventBus idempotent'ten SONRA eklenir (ctor-senkron; M4 kuralı).
+        assertTrue(content.contains("IdempotencyStore idempotencyStore, EventBus eventBus) {"));
         assertTrue(content.contains(
-                "return new CreateInvoiceHandler(invoiceRepository, idempotencyStore);"));
+                "return new CreateInvoiceHandler(invoiceRepository, idempotencyStore, eventBus);"));
     }
 
     // ── Pagination: ListInvoices strategy=cursor, keys=[createdAt desc], size=20 ─────────────────

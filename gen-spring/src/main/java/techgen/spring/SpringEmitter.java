@@ -24,6 +24,7 @@ import techgen.core.model.OperationJson;
 import techgen.core.model.ParamJson;
 import techgen.core.model.ServingArg;
 import techgen.core.model.ServingJson;
+import techgen.core.model.SubscriptionJson;
 import techgen.core.model.TypeJson;
 import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
@@ -211,6 +212,15 @@ public final class SpringEmitter {
                     depArgList.add("idempotencyStore");
                     wiringImports.add("import app.IdempotencyStore;");
                 }
+                // T4.2 — emits!=[] op: {op}Handler bean'i ayrıca EventBus alır (ctor-senkron;
+                // idempotent'ten SONRA; bean GeneratedBootstrap'ta EXPLICIT @Bean — Spring
+                // context-genelinde çözülür).
+                boolean emits = !op.op().emits().isEmpty();
+                if (emits) {
+                    depParamList.add("EventBus eventBus");
+                    depArgList.add("eventBus");
+                    wiringImports.add("import app.EventBus;");
+                }
                 String depParams = String.join(", ", depParamList);
                 String depArgs = String.join(", ", depArgList);
                 for (RepoDep d : deps) {
@@ -239,6 +249,27 @@ public final class SpringEmitter {
             }
             writer.writeAlways("gen/java/app/" + pkg + "/" + cls + ".java",
                     moduleWiring(module, wiringImports, wiringBeans.toString(), anyBean));
+        }
+
+        // ── Subscriptions (T4.2 §5.2-5.3; SPEC §6.3 Subscriptions.g.cs satırı; referans §1
+        // `:1348-1398`/`:39-48`) — yalnız subscriptions>0. CONSUMER op'un MODÜL SLICE'INDA yaşar
+        // (event'in modülünde DEĞİL — T4.2 §2 Why: yanlış modüle emit = census kapanır ama
+        // davranış yanlış olur / silent-fail). ──
+        if (!gm.subscriptions().isEmpty()) {
+            for (SubscriptionJson s : gm.subscriptions()) {
+                String consumerModule = s.consumer().module();
+                String consumerOp = s.consumer().op();
+                String consumerPkg = Naming.packageOf(consumerModule);
+                String consumerSlug = consumerOp.toLowerCase(Locale.ROOT);
+                String cls = s.event().name() + "To" + consumerOp + "Consumer";
+                String genConsumerDir = "gen/java/app/" + consumerPkg + "/" + consumerSlug;
+                String humanConsumerDir = "src/main/java/app/" + consumerPkg + "/" + consumerSlug;
+
+                writer.writeAlways(genConsumerDir + "/" + cls + "Base.java", subscriptionConsumerBaseJava(s));
+                writer.writeIfAbsent(humanConsumerDir + "/" + cls + ".java",
+                        subscriptionConsumerLogicJava(s, report));
+            }
+            writer.writeAlways("gen/java/app/Subscriptions.java", subscriptionsRootJava(gm));
         }
 
         writer.finishAndPrune();
@@ -471,6 +502,14 @@ public final class SpringEmitter {
                 importedClasses.append(", ");
             }
             importedClasses.append("PersistenceConfig.class");
+        }
+        // subscriptions>0 → kök Subscriptions kaydı (aynı paket "app" — import satırı gerekmez;
+        // T4.2; SPEC §6.3 Subscriptions.g.cs satırı).
+        if (!gm.subscriptions().isEmpty()) {
+            if (!importedClasses.isEmpty()) {
+                importedClasses.append(", ");
+            }
+            importedClasses.append("Subscriptions.class");
         }
         // events>0 → EventBus bean kaydı (.NET Bootstrap.g.cs `AddScoped<IEventBus, OutboxEventBus>` paritesi).
         boolean eventBusBean = !gm.events().isEmpty();
@@ -727,6 +766,7 @@ public final class SpringEmitter {
         OperationJson o = op.op();
         boolean idempotent = o.idempotent() != null;
         boolean paginated = o.pagination() != null;
+        boolean emits = !o.emits().isEmpty();
         StringBuilder imports = new StringBuilder("import app.Result;\n");
         String retImport = customTypeImport(o.signature().returns(), gm);
         imports.append(repoImportsBlock(deps));
@@ -738,6 +778,9 @@ public final class SpringEmitter {
         }
         if (paginated) {
             imports.append("import app.Page;\n");
+        }
+        if (emits) {
+            imports.append("import app.EventBus;\n");
         }
 
         StringBuilder fields = new StringBuilder();
@@ -755,6 +798,19 @@ public final class SpringEmitter {
             fields.append("    protected final IdempotencyStore idempotencyStore;\n");
             ctorParams.add("IdempotencyStore idempotencyStore");
             ctorAssigns.append("        this.idempotencyStore = idempotencyStore;\n");
+        }
+        // T4.2 — emits!=[] op: DI'a EventBus eklenir (ctor-senkron; idempotent'ten SONRA; Wiring
+        // bean çağrısı da günceldir; referans §1 EventBus.g.cs + SPEC §6.3 Events.g.cs/EventBus.g.cs
+        // satırı). Publish çağrısı iş gövdesinde (insan seam) — burada yalnız DI erişimi sağlanır.
+        if (emits) {
+            for (String ev : o.emits()) {
+                report.realized("emits", opId + "->" + ev);
+            }
+            fields.append("    // emits: ").append(String.join(", ", o.emits()))
+                    .append(" (publish gövdesi iş mantığında; EventBus.publish çağrısı insan seam sorumluluğu)\n");
+            fields.append("    protected final EventBus eventBus;\n");
+            ctorParams.add("EventBus eventBus");
+            ctorAssigns.append("        this.eventBus = eventBus;\n");
         }
 
         // T3.7 — Auth (roles/scopes/ownership varsa).
@@ -1103,6 +1159,7 @@ public final class SpringEmitter {
         OperationJson o = op.op();
         boolean idempotent = o.idempotent() != null;
         boolean paginated = o.pagination() != null;
+        boolean emits = !o.emits().isEmpty();
         StringBuilder imports = new StringBuilder("import app.Result;\n");
         String retImport = customTypeImport(o.signature().returns(), gm);
         imports.append(repoImportsBlock(deps));
@@ -1115,6 +1172,9 @@ public final class SpringEmitter {
         if (paginated) {
             imports.append("import app.Page;\n");
         }
+        if (emits) {
+            imports.append("import app.EventBus;\n");
+        }
         List<String> ctorParamList = new ArrayList<>();
         List<String> superArgList = new ArrayList<>();
         for (RepoDep d : deps) {
@@ -1125,6 +1185,12 @@ public final class SpringEmitter {
         if (idempotent) {
             ctorParamList.add("IdempotencyStore idempotencyStore");
             superArgList.add("idempotencyStore");
+        }
+        // T4.2 — ctor-senkron: HandlerBase emits!=[] op'ta EventBus alıyorsa human seam de aynısını
+        // iletir (idempotent'ten SONRA — HandlerBase ctor sırasıyla birebir).
+        if (emits) {
+            ctorParamList.add("EventBus eventBus");
+            superArgList.add("eventBus");
         }
         String ctorParams = String.join(", ", ctorParamList);
         String superArgs = String.join(", ", superArgList);
@@ -1967,5 +2033,122 @@ public final class SpringEmitter {
                     }
                 }
                 """;
+    }
+
+    // ── Subscription consumer (T4.2 §5.2; SPEC §6.2/§6.3 Subscriptions.g.cs satırı; referans §1
+    // `:1348-1383`) — Generation Gap: gen-owned {Event}To{Op}ConsumerBase (WriteAlways) + human seam
+    // {Event}To{Op}Consumer (WriteIfAbsent, marker). CONSUMER op'un MODÜL SLICE'INDA yaşar — event'in
+    // modülünde DEĞİL (T4.2 §2 Why: yanlış modüle emit = silent-fail davranış hatası). ──
+
+    /**
+     * Gen-owned taban sınıf: {@code {Op}Handler} alanı + ctor + gövdesiz {@code handle(event)}.
+     * Javadoc playbook kanonik sırasını belirtir: event→request eşle → handler.execute çağır.
+     */
+    private static String subscriptionConsumerBaseJava(SubscriptionJson s) {
+        String consumerModule = s.consumer().module();
+        String consumerOp = s.consumer().op();
+        String eventModule = s.event().module();
+        String eventName = s.event().name();
+        String slicePkg = Naming.slicePackage(consumerModule, consumerOp);
+        String cls = eventName + "To" + consumerOp + "Consumer";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        if (!eventModule.equals(consumerModule)) {
+            sb.append("import app.").append(Naming.packageOf(eventModule)).append('.').append(eventName)
+                    .append(";\n\n");
+        }
+        sb.append("/**\n");
+        sb.append(" * ").append(eventName).append(" -&gt; ").append(consumerOp)
+                .append(" subscription taban sınıfı (Generation Gap, gen-owned; SPEC §6.2/§6.3\n");
+        sb.append(" * Subscriptions.g.cs satırı). Gövde human seam'de ({@code ").append(cls).append("}):\n");
+        sb.append(" * event -&gt; request eşle -&gt; handler.execute çağır (playbook kanonik sırası).\n");
+        sb.append(" */\n");
+        sb.append("public abstract class ").append(cls).append("Base {\n\n");
+        sb.append("    protected final ").append(consumerOp).append("Handler handler;\n\n");
+        sb.append("    protected ").append(cls).append("Base(").append(consumerOp).append("Handler handler) {\n");
+        sb.append("        this.handler = handler;\n");
+        sb.append("    }\n\n");
+        sb.append("    public abstract void handle(").append(eventName).append(" event);\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Human seam ({@code {Event}To{Op}Consumer}, writeIfAbsent): base'i extend eder; {@code handle}
+     * gövdesi birebir marker fırlatır (SPEC §6.2 Subscription marker: {@code "{cls}.handle:
+     * doldurulacak"}). {@code realized("subscription", event.name())} burada (census, Completeness §7).
+     */
+    private static String subscriptionConsumerLogicJava(SubscriptionJson s, BuildReport report) {
+        String consumerModule = s.consumer().module();
+        String consumerOp = s.consumer().op();
+        String eventModule = s.event().module();
+        String eventName = s.event().name();
+        report.realized("subscription", eventName);
+
+        String slicePkg = Naming.slicePackage(consumerModule, consumerOp);
+        String cls = eventName + "To" + consumerOp + "Consumer";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        if (!eventModule.equals(consumerModule)) {
+            sb.append("import app.").append(Naming.packageOf(eventModule)).append('.').append(eventName)
+                    .append(";\n\n");
+        }
+        sb.append("public class ").append(cls).append(" extends ").append(cls).append("Base {\n\n");
+        sb.append("    public ").append(cls).append('(').append(consumerOp).append("Handler handler) {\n");
+        sb.append("        super(handler);\n");
+        sb.append("    }\n\n");
+        sb.append("    @Override\n");
+        sb.append("    public void handle(").append(eventName).append(" event) {\n");
+        sb.append("        throw new UnsupportedOperationException(\"").append(cls)
+                .append(".handle: doldurulacak\");\n");
+        sb.append("    }\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Kök {@code Subscriptions.java} (T4.2 §5.3; yalnız subscriptions>0): human consumer sınıfları
+     * {@code @Bean} ile TAM-AÇIK kaydedilir (SPEC §12/4; component-scan YOK). Gerçek event→consumer
+     * dispatch in-memory bus stub'ının altyapı işi (§8) — bu sınıf yalnız kayıt + stub tutar.
+     */
+    private static String subscriptionsRootJava(GenerationModel gm) {
+        Set<String> imports = new TreeSet<>();
+        StringBuilder beans = new StringBuilder();
+        for (SubscriptionJson s : gm.subscriptions()) {
+            String consumerModule = s.consumer().module();
+            String consumerOp = s.consumer().op();
+            String consumerPkg = Naming.packageOf(consumerModule);
+            String consumerSlug = consumerOp.toLowerCase(Locale.ROOT);
+            String cls = s.event().name() + "To" + consumerOp + "Consumer";
+
+            imports.add("import app." + consumerPkg + "." + consumerSlug + "." + consumerOp + "Handler;\n");
+            imports.add("import app." + consumerPkg + "." + consumerSlug + "." + cls + ";\n");
+
+            String camelBean = Naming.camel(cls);
+            beans.append("    @Bean\n");
+            beans.append("    public ").append(cls).append(' ').append(camelBean).append('(')
+                    .append(consumerOp).append("Handler handler) {\n");
+            beans.append("        return new ").append(cls).append("(handler);\n");
+            beans.append("    }\n\n");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package app;\n\n");
+        sb.append("import org.springframework.context.annotation.Bean;\n");
+        sb.append("import org.springframework.context.annotation.Configuration;\n");
+        for (String imp : imports) {
+            sb.append(imp);
+        }
+        sb.append('\n');
+        sb.append("// subscription kaydı — event->consumer dispatch in-memory bus stub'ının altyapı/\n");
+        sb.append("// doldurucu işi (§8 EventBus); bu sınıf yalnız consumer bean'lerini TAM-AÇIK kaydeder\n");
+        sb.append("// (SPEC §12/4; component-scan YOK).\n");
+        sb.append("@Configuration\n");
+        sb.append("public class Subscriptions {\n\n");
+        sb.append(beans);
+        sb.append("}\n");
+        return sb.toString();
     }
 }
