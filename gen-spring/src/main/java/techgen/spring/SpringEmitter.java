@@ -19,12 +19,18 @@ import techgen.core.model.FieldJson;
 import techgen.core.model.GuardedExpr;
 import techgen.core.model.ModuleDecl;
 import techgen.core.model.OperationJson;
+import techgen.core.model.ParamJson;
+import techgen.core.model.ServingArg;
+import techgen.core.model.ServingJson;
 import techgen.core.model.TypeJson;
 import techgen.core.predicate.ExprWalk;
 import techgen.core.report.BuildReport;
 
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
@@ -82,7 +88,6 @@ public final class SpringEmitter {
         for (ModuleDecl module : gm.modules()) {
             String pkg = Naming.packageOf(module.name());
             String cls = Naming.pascal(module.name()) + "Wiring";
-            writer.writeAlways("gen/java/app/" + pkg + "/" + cls + ".java", moduleWiring(module));
 
             // ── Errors katalogu (T3.3 §5.3) ──
             List<ErrorJson> moduleErrors = gm.errors().stream()
@@ -136,6 +141,82 @@ public final class SpringEmitter {
                     writer.writeAlways("gen/java/app/" + pkg + "/" + slice + "/" + op.id() + "Guards.java", guards);
                 }
             }
+
+            // ── Operation slice (T3.6 §5.1-5.5; SPEC §6.2-6.4) — request record + HandlerBase
+            // (Generation Gap, gen-owned) + human seam ({Op}Handler, writeIfAbsent) + Endpoint
+            // (visibility!=internal ∧ rest serving var) — Wiring bean kayıtları bu döngüde
+            // biriktirilir, dosya döngü SONUNDA yazılır (bean içerikleri önceden bilinmeli). ──
+            Set<String> wiringImports = new TreeSet<>();
+            StringBuilder wiringBeans = new StringBuilder();
+            boolean anyBean = false;
+            for (GmOperation op : gm.operations()) {
+                if (!op.module().equals(module.name())) {
+                    continue;
+                }
+                String opId = op.id();
+                String opSlug = opId.toLowerCase(Locale.ROOT);
+                String slicePkg = Naming.slicePackage(op.module(), opId);
+                String genSliceDir = "gen/java/app/" + pkg + "/" + opSlug;
+                String humanSliceDir = "src/main/java/app/" + pkg + "/" + opSlug;
+                String reqName = opId + (op.isCommand() ? "Command" : "Query");
+                String retType = Naming.javaType(op.op().signature().returns(), false);
+                List<RepoDep> deps = repoDeps(op, gm);
+
+                // Step 5.1 — request record.
+                writer.writeAlways(genSliceDir + "/" + reqName + ".java",
+                        requestRecordJava(op, gm, slicePkg, reqName, report));
+
+                // Step 5.2 — HandlerBase (abstract, gen-owned).
+                writer.writeAlways(genSliceDir + "/" + opId + "HandlerBase.java",
+                        handlerBaseJava(op, gm, slicePkg, reqName, retType, deps));
+
+                // Step 5.3 — human seam (writeIfAbsent); brownfield migrasyon önce.
+                Path oldFlat = outDir.resolve("src/main/java/app/" + pkg + "/" + opId + "Handler.java");
+                Path newSlice = outDir.resolve(humanSliceDir + "/" + opId + "Handler.java");
+                writer.migrateSeamIfFlat(oldFlat, newSlice);
+                writer.writeIfAbsent(humanSliceDir + "/" + opId + "Handler.java",
+                        humanHandlerJava(op, gm, slicePkg, reqName, retType, deps));
+
+                // Step 5.4 — Endpoint: internal görünürlük VEYA rest-serving yoksa emit edilmez.
+                boolean hasRest = op.op().serving().stream().anyMatch(s -> "rest".equals(s.protocol()));
+                boolean emitEndpoint = !"internal".equals(op.op().visibility()) && hasRest;
+                if (emitEndpoint) {
+                    writer.writeAlways(genSliceDir + "/" + opId + "Endpoint.java",
+                            endpointJava(op, slicePkg, reqName));
+                    report.realized("serving", opId + ":rest");
+                }
+
+                // Step 5.5 — Wiring bean kayıtları (TAM-AÇIK KAYIT, SPEC §12/4) biriktir.
+                String depParams = deps.stream()
+                        .map(d -> d.entityId() + "Repository " + d.fieldName())
+                        .collect(Collectors.joining(", "));
+                String depArgs = deps.stream().map(RepoDep::fieldName).collect(Collectors.joining(", "));
+                for (RepoDep d : deps) {
+                    if (!d.module().equals(module.name())) {
+                        wiringImports.add("import app." + Naming.packageOf(d.module()) + "." + d.entityId()
+                                + "Repository;");
+                    }
+                }
+                wiringImports.add("import app." + pkg + "." + opSlug + "." + opId + "Handler;");
+                String camelOp = Naming.camel(opId);
+                wiringBeans.append("    @Bean\n");
+                wiringBeans.append("    public ").append(opId).append("Handler ").append(camelOp)
+                        .append("Handler(").append(depParams).append(") {\n");
+                wiringBeans.append("        return new ").append(opId).append("Handler(").append(depArgs)
+                        .append(");\n");
+                wiringBeans.append("    }\n\n");
+                anyBean = true;
+                if (emitEndpoint) {
+                    wiringImports.add("import app." + pkg + "." + opSlug + "." + opId + "Endpoint;");
+                    wiringBeans.append("    @Bean\n");
+                    wiringBeans.append("    public ").append(opId).append("Endpoint ").append(camelOp)
+                            .append("Endpoint(").append(opId).append("Handler h) {\n");
+                    wiringBeans.append("        return new ").append(opId).append("Endpoint(h);\n");
+                    wiringBeans.append("    }\n\n");
+                }
+            }
+            writer.writeAlways("gen/java/app/" + pkg + "/" + cls + ".java",
+                    moduleWiring(module, wiringImports, wiringBeans.toString(), anyBean));
         }
 
         writer.finishAndPrune();
@@ -394,19 +475,380 @@ public final class SpringEmitter {
                 """.formatted(beanImport, imports, importedClasses, eventBusMethod);
     }
 
-    private static String moduleWiring(ModuleDecl module) {
+    /**
+     * Modül Wiring (T3.6 §5.5; SPEC §12/4 TAM-AÇIK KAYIT) — op başına {@code {Op}Handler} bean'i
+     * (insan sınıfı, gen-owned config'ten kaydedilir) + varsa {@code {Op}Endpoint} bean'i
+     * (controller da açık @Bean ile; component-scan YOK). {@code opImports}/{@code beanMethods}
+     * çağıran döngüde biriktirilir (ordinal-sıralı import seti; determinizm).
+     */
+    private static String moduleWiring(ModuleDecl module, Set<String> opImports, String beanMethods,
+            boolean anyBean) {
         String pkg = Naming.packageOf(module.name());
         String cls = Naming.pascal(module.name()) + "Wiring";
+        String beanImport = anyBean ? "import org.springframework.context.annotation.Bean;\n" : "";
+        StringBuilder importsBlock = new StringBuilder();
+        for (String imp : opImports) {
+            importsBlock.append(imp).append('\n');
+        }
+        String body = anyBean ? beanMethods : "    // op kayıtları: bu modülde op yok\n";
         return """
                 package app.%s;
 
-                import org.springframework.context.annotation.Configuration;
-
+                %simport org.springframework.context.annotation.Configuration;
+                %s
                 @Configuration
                 public class %s {
-                    // op kayıtları: T3.6+
+                %s}
+                """.formatted(pkg, beanImport, importsBlock, cls, body);
+    }
+
+    // ── Operation slice (T3.6 §5.1-5.4; SPEC §6.2-6.4; referans §1 `:1466-1513`/`:1663-1685`) —
+    // request record + HandlerBase (Generation Gap abstract) + human seam + Endpoint. Op-slice
+    // paketi (app.{module}.{op}) her zaman modül-kök paketinden (app.{module}) FARKLIDIR — bu yüzden
+    // entity/repository/Result gibi modül-kök tipleri BURADA her zaman import edilir. ──
+
+    /** Bir op'un DI'a taşıdığı repository bağımlılığı (entity id + sahip modülü + alan adı). */
+    private record RepoDep(String entityId, String module, String fieldName) {
+    }
+
+    private static EntityJson findEntity(GenerationModel gm, String entityId) {
+        for (EntityJson e : gm.entities()) {
+            if (e.id().equals(entityId)) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** {@code access.reads∪creates∪updates∪deletes} entity'leri, ordinal-distinct (task §5.2). */
+    private static List<String> accessEntitiesOrdinalDistinct(GmOperation op) {
+        var access = op.op().access();
+        Set<String> set = new TreeSet<>();
+        set.addAll(access.reads());
+        set.addAll(access.creates());
+        set.addAll(access.updates());
+        set.addAll(access.deletes());
+        return new ArrayList<>(set);
+    }
+
+    /** Ordinal-distinct access entity'lerinden HandlerBase/Handler/Wiring'in paylaştığı repo bağımlılık listesi. */
+    private static List<RepoDep> repoDeps(GmOperation op, GenerationModel gm) {
+        List<RepoDep> deps = new ArrayList<>();
+        for (String entityId : accessEntitiesOrdinalDistinct(op)) {
+            EntityJson e = findEntity(gm, entityId);
+            if (e != null) {
+                deps.add(new RepoDep(entityId, e.module(), Naming.camel(entityId) + "Repository"));
+            }
+        }
+        return deps;
+    }
+
+    /** Bir manifest tip adı GM'de entity/type/event id'sine eşleşiyorsa cross-package import satırı; yoksa null. */
+    private static String customTypeImport(String manifestType, GenerationModel gm) {
+        for (EntityJson e : gm.entities()) {
+            if (e.id().equals(manifestType)) {
+                return "import app." + Naming.packageOf(e.module()) + "." + e.id() + ";\n";
+            }
+        }
+        for (TypeJson t : gm.types()) {
+            if (t.id().equals(manifestType)) {
+                return "import app." + Naming.packageOf(t.module()) + "." + t.id() + ";\n";
+            }
+        }
+        for (EventJson ev : gm.events()) {
+            if (ev.id().equals(manifestType)) {
+                return "import app." + Naming.packageOf(ev.module()) + "." + ev.id() + ";\n";
+            }
+        }
+        return null;
+    }
+
+    /** Java tip adlarına göre gereken java.* import satırları ({@link #typeFieldImports} ile aynı sabit sıra). */
+    private static String paramImports(List<String> javaTypes) {
+        boolean bigDecimal = false;
+        boolean instant = false;
+        boolean localDate = false;
+        boolean duration = false;
+        boolean list = false;
+        for (String t : javaTypes) {
+            switch (t) {
+                case "BigDecimal" -> bigDecimal = true;
+                case "Instant" -> instant = true;
+                case "LocalDate" -> localDate = true;
+                case "Duration" -> duration = true;
+                default -> {
+                    if (t.startsWith("List<")) {
+                        list = true;
+                    }
                 }
-                """.formatted(pkg, cls);
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        if (bigDecimal) {
+            sb.append("import java.math.BigDecimal;\n");
+        }
+        if (instant) {
+            sb.append("import java.time.Instant;\n");
+        }
+        if (localDate) {
+            sb.append("import java.time.LocalDate;\n");
+        }
+        if (duration) {
+            sb.append("import java.time.Duration;\n");
+        }
+        if (list) {
+            sb.append("import java.util.List;\n");
+        }
+        return sb.toString();
+    }
+
+    /** {@code {Entity}Repository} import satırları, ordinal (repoDeps sırası — entity id ordinal). */
+    private static String repoImportsBlock(List<RepoDep> deps) {
+        StringBuilder sb = new StringBuilder();
+        for (RepoDep d : deps) {
+            sb.append("import app.").append(Naming.packageOf(d.module())).append('.').append(d.entityId())
+                    .append("Repository;\n");
+        }
+        return sb.toString();
+    }
+
+    private static String escapeJavadoc(String s) {
+        return s.replace("*/", "*&#47;");
+    }
+
+    /**
+     * Step 5.1 — request record ({@code {Op}Command}/{@code {Op}Query}): signature.params →
+     * Naming.javaType bileşenleri; visibility yorumu; note varsa record-üstü Javadoc.
+     * {@code realized("operation"/"visibility")} burada (HandlerBase ile birlikte bir kez).
+     */
+    private static String requestRecordJava(GmOperation op, GenerationModel gm, String slicePkg, String reqName,
+            BuildReport report) {
+        OperationJson o = op.op();
+        List<ParamJson> params = o.signature().params();
+        List<String> javaTypes = new ArrayList<>();
+        List<String> components = new ArrayList<>();
+        Set<String> customImports = new TreeSet<>();
+        for (ParamJson p : params) {
+            String javaType = Naming.javaType(p.type(), p.collection());
+            javaTypes.add(javaType);
+            String custom = customTypeImport(p.type(), gm);
+            if (custom != null) {
+                customImports.add(custom);
+            }
+            components.add(javaType + " " + Naming.camel(p.name()));
+        }
+        String stdImports = paramImports(javaTypes);
+        String customImportsBlock = String.join("", customImports);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        sb.append(stdImports);
+        sb.append(customImportsBlock);
+        if (!stdImports.isEmpty() || !customImportsBlock.isEmpty()) {
+            sb.append('\n');
+        }
+        sb.append("// visibility: ").append(o.visibility()).append('\n');
+        if (o.note() != null) {
+            sb.append("/**\n * ").append(escapeJavadoc(o.note())).append("\n */\n");
+            report.realized("note", op.id());
+        }
+        sb.append("public record ").append(reqName).append('(').append(String.join(", ", components))
+                .append(") {\n}\n");
+
+        report.realized("operation", op.id());
+        report.realized("visibility", op.id());
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.2 — HandlerBase (Generation Gap, gen-owned, abstract): DI alanları (repository'ler) +
+     * ctor + gövdesiz {@code execute}. Guards çağrı sırası (skill canonicalOrder, SPEC §6.3/§10)
+     * yalnız Javadoc referansı — çağrı T3.6 dışı.
+     */
+    private static String handlerBaseJava(GmOperation op, GenerationModel gm, String slicePkg, String reqName,
+            String retType, List<RepoDep> deps) {
+        String opId = op.id();
+        StringBuilder imports = new StringBuilder("import app.Result;\n");
+        String retImport = customTypeImport(op.op().signature().returns(), gm);
+        imports.append(repoImportsBlock(deps));
+        if (retImport != null) {
+            imports.append(retImport);
+        }
+
+        StringBuilder fields = new StringBuilder();
+        List<String> ctorParams = new ArrayList<>();
+        StringBuilder ctorAssigns = new StringBuilder();
+        for (RepoDep d : deps) {
+            fields.append("    protected final ").append(d.entityId()).append("Repository ")
+                    .append(d.fieldName()).append(";\n");
+            ctorParams.add(d.entityId() + "Repository " + d.fieldName());
+            ctorAssigns.append("        this.").append(d.fieldName()).append(" = ").append(d.fieldName())
+                    .append(";\n");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        sb.append(imports);
+        sb.append('\n');
+        sb.append("/**\n");
+        sb.append(" * Generation Gap taban sınıf (abstract; SPEC §6.2) — DI alanları burada; sonraki\n");
+        sb.append(" * task'lar (idempotency/authz/external/event/vb.) kendi bölümlerini ekler.\n");
+        sb.append(" * Guard çağrı sırası kanonik (skill canonicalOrder, çağrı T3.6 dışı — yalnız referans):\n");
+        sb.append(" * idempotency -&gt; authz -&gt; validation -&gt; external-input -&gt; rule -&gt;\n");
+        sb.append(" * entity+invariant -&gt; persist -&gt; emit -&gt; return.\n");
+        sb.append(" */\n");
+        sb.append("public abstract class ").append(opId).append("HandlerBase {\n\n");
+        sb.append(fields);
+        if (!deps.isEmpty()) {
+            sb.append('\n');
+        }
+        sb.append("    protected ").append(opId).append("HandlerBase(").append(String.join(", ", ctorParams))
+                .append(") {\n");
+        sb.append(ctorAssigns);
+        sb.append("    }\n\n");
+        sb.append("    public abstract Result<").append(retType).append("> execute(").append(reqName)
+                .append(" request);\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Step 5.3 — human seam ({@code {Op}Handler}, writeIfAbsent): HandlerBase'i extend eder;
+     * {@code execute} gövdesi birebir marker fırlatır (skill tespiti substring {@code doldurulacak}).
+     */
+    private static String humanHandlerJava(GmOperation op, GenerationModel gm, String slicePkg, String reqName,
+            String retType, List<RepoDep> deps) {
+        String opId = op.id();
+        StringBuilder imports = new StringBuilder("import app.Result;\n");
+        String retImport = customTypeImport(op.op().signature().returns(), gm);
+        imports.append(repoImportsBlock(deps));
+        if (retImport != null) {
+            imports.append(retImport);
+        }
+        String ctorParams = deps.stream().map(d -> d.entityId() + "Repository " + d.fieldName())
+                .collect(Collectors.joining(", "));
+        String superArgs = deps.stream().map(RepoDep::fieldName).collect(Collectors.joining(", "));
+
+        return """
+                package %s;
+
+                %s
+                public class %sHandler extends %sHandlerBase {
+
+                    public %sHandler(%s) {
+                        super(%s);
+                    }
+
+                    @Override
+                    public Result<%s> execute(%s request) {
+                        throw new UnsupportedOperationException("%s: iş mantığı doldurulacak");
+                    }
+                }
+                """.formatted(slicePkg, imports, opId, opId, opId, ctorParams, superArgs, retType, reqName, opId);
+    }
+
+    /**
+     * Step 5.4 — Endpoint ({@code @RestController}): rest serving başına bir route metodu.
+     * POST/PUT/PATCH → {@code @RequestBody}; GET/DELETE → route param'ları {@code @PathVariable},
+     * kalan record bileşenleri {@code @RequestParam} (request paramlardan kurulur).
+     */
+    private static String endpointJava(GmOperation op, String slicePkg, String reqName) {
+        String opId = op.id();
+        OperationJson o = op.op();
+        List<ParamJson> params = o.signature().params();
+        Set<String> annotationImports = new TreeSet<>();
+        annotationImports.add("RestController");
+        StringBuilder methods = new StringBuilder();
+        int idx = 0;
+        for (ServingJson s : o.serving()) {
+            if (!"rest".equals(s.protocol())) {
+                continue;
+            }
+            String method = restMethod(s);
+            String route = restRoute(s);
+            List<String> routeParams = restRouteParams(s);
+            String verbAnno = Naming.httpVerbAnnotation(method);
+            annotationImports.add(verbAnno.substring(1));
+            String methodName = Naming.camel(opId) + (idx > 0 ? String.valueOf(idx) : "");
+
+            methods.append("    ").append(verbAnno).append("(\"").append(route).append("\")\n");
+            if (Naming.bindsBody(method)) {
+                annotationImports.add("RequestBody");
+                methods.append("    public ResponseEntity<?> ").append(methodName).append("(@RequestBody ")
+                        .append(reqName).append(" request) {\n");
+                methods.append("        return ResultHttp.toHttp(handler.execute(request));\n");
+                methods.append("    }\n\n");
+            } else {
+                List<String> methodParams = new ArrayList<>();
+                List<String> ctorArgs = new ArrayList<>();
+                for (ParamJson p : params) {
+                    String javaType = Naming.javaType(p.type(), p.collection());
+                    String camel = Naming.camel(p.name());
+                    if (routeParams.contains(p.name())) {
+                        annotationImports.add("PathVariable");
+                        methodParams.add("@PathVariable " + javaType + " " + camel);
+                    } else {
+                        annotationImports.add("RequestParam");
+                        methodParams.add("@RequestParam " + javaType + " " + camel);
+                    }
+                    ctorArgs.add(camel);
+                }
+                methods.append("    public ResponseEntity<?> ").append(methodName).append('(')
+                        .append(String.join(", ", methodParams)).append(") {\n");
+                methods.append("        ").append(reqName).append(" request = new ").append(reqName)
+                        .append('(').append(String.join(", ", ctorArgs)).append(");\n");
+                methods.append("        return ResultHttp.toHttp(handler.execute(request));\n");
+                methods.append("    }\n\n");
+            }
+            idx++;
+        }
+
+        StringBuilder imports = new StringBuilder();
+        imports.append("import app.ResultHttp;\n");
+        imports.append("import org.springframework.http.ResponseEntity;\n");
+        for (String a : annotationImports) {
+            imports.append("import org.springframework.web.bind.annotation.").append(a).append(";\n");
+        }
+
+        return "package " + slicePkg + ";\n\n"
+                + imports
+                + "\n@RestController\npublic class " + opId + "Endpoint {\n\n"
+                + "    private final " + opId + "Handler handler;\n\n"
+                + "    public " + opId + "Endpoint(" + opId + "Handler handler) {\n"
+                + "        this.handler = handler;\n"
+                + "    }\n\n"
+                + methods
+                + "}\n";
+    }
+
+    /** İlk keyword arg değeri (HTTP metodu); yoksa GET (Naming.httpVerbAnnotation default'u zaten GET). */
+    private static String restMethod(ServingJson s) {
+        for (ServingArg a : s.args()) {
+            if ("keyword".equals(a.kind())) {
+                return a.value();
+            }
+        }
+        return "GET";
+    }
+
+    /** İlk string arg değeri (route); yoksa "/". */
+    private static String restRoute(ServingJson s) {
+        for (ServingArg a : s.args()) {
+            if ("string".equals(a.kind())) {
+                return a.value();
+            }
+        }
+        return "/";
+    }
+
+    /** Route string arg'ının {@code params} listesi (route token'ları); yoksa boş liste. */
+    private static List<String> restRouteParams(ServingJson s) {
+        for (ServingArg a : s.args()) {
+            if ("string".equals(a.kind())) {
+                return a.params() == null ? List.of() : a.params();
+            }
+        }
+        return List.of();
     }
 
     // ── Result taksonomisi (SPEC §6.3 satırı; referans §1 "Result taksonomisi"; INV-5 — kapalı 6'lı
