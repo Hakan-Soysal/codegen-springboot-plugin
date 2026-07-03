@@ -84,7 +84,19 @@ class TestEmissionTest {
     void fourOrphanOps_allSingle_emitsSkeletonAndArrangeSeam_forEachOp(@TempDir Path outDir) throws IOException {
         GenerationModel gm = fourOrphanOpsGm();
         assertEquals(4, gm.testPlan().orphanOpTests().size(), "ön koşul: 4 orphanOpTest (process/flow yok)");
-        SpringEmitter.emit(gm, outDir, new BuildReport(), h2Config());
+        BuildReport report = new BuildReport();
+        SpringEmitter.emit(gm, outDir, report, h2Config());
+
+        // T7.1-PARITE: .NET DotnetEmitter.cs:235 paritesi — her all-Single test emit edildiğinde
+        // report.realized("test", "{Scope}_{Name}") çağrılır (id-şeması §10 OrphanOp_*).
+        assertTrue(report.entries().stream().anyMatch(e -> "test".equals(e.construct())
+                        && "OrphanOp_CreateInvoice".equals(e.id())
+                        && e.status() == BuildReport.ConstructStatus.REALIZED),
+                "report.realized(\"test\", \"OrphanOp_CreateInvoice\") bekleniyor; entries=" + report.entries());
+        assertTrue(report.entries().stream().anyMatch(e -> "test".equals(e.construct())
+                        && "OrphanOp_WriteAuditLog".equals(e.id())
+                        && e.status() == BuildReport.ConstructStatus.REALIZED),
+                "report.realized(\"test\", \"OrphanOp_WriteAuditLog\") bekleniyor; entries=" + report.entries());
 
         // Fixture harness her zaman emit edilir.
         assertTrue(Files.exists(outDir.resolve("gen/test-java/app/Fixture.java")));
@@ -201,6 +213,12 @@ class TestEmissionTest {
                         && e.status() == BuildReport.ConstructStatus.UNSUPPORTED),
                 "Unsupported(\"test-prereq\", \"P: E creator=ambiguous\", ...) entry bekleniyor; gerçek entries="
                         + report.entries());
+
+        // T7.1-PARITE: Single-dışı (Unsupported) test için realize ÇAĞRILMAMALI — yalnız all-Single
+        // testler census'a "test" olarak girer (.NET DotnetEmitter.cs:235 paritesi).
+        assertFalse(report.entries().stream().anyMatch(e -> "test".equals(e.construct())),
+                "Unsupported test-prereq'li process için 'test' realize entry OLMAMALI; entries="
+                        + report.entries());
     }
 
     // ── Senaryo 3: studyo (gerçek veri) — processTests&gt;0 iskeletleri üretiliyor (sayı raporlanır).
@@ -223,7 +241,8 @@ class TestEmissionTest {
         int processTestCount = gm.testPlan().processTests().size();
         assertTrue(processTestCount > 0, "ön koşul: studyo'da processTests>0 (T2.2 build_studyo_threeListCounts)");
 
-        SpringEmitter.emit(gm, outDir, new BuildReport(), h2Config());
+        BuildReport report = new BuildReport();
+        SpringEmitter.emit(gm, outDir, report, h2Config());
 
         assertTrue(Files.exists(outDir.resolve("gen/test-java/app/process")),
                 "studyo processTests için 'process' klasörü üretilmeli");
@@ -232,6 +251,13 @@ class TestEmissionTest {
             emittedCount = walk.filter(p -> p.toString().endsWith("Test.java")).count();
         }
         assertTrue(emittedCount > 0, "en az bir process test iskeleti üretilmeli; üretilen=" + emittedCount);
+
+        // T7.1-PARITE: studyo (gerçek veri) emisyonunda en az bir "test" census realize entry var.
+        long testRealizedCount = report.entries().stream()
+                .filter(e -> "test".equals(e.construct()) && e.status() == BuildReport.ConstructStatus.REALIZED)
+                .count();
+        assertTrue(testRealizedCount > 0,
+                "studyo emisyonunda en az bir report.realized(\"test\", ...) entry bekleniyor");
         // Not (task raporunda tekrarlanır): processTestCount=%d, emittedCount=%d — bazı process'ler
         // Single-dışı prereq içerebileceğinden emittedCount <= processTestCount (Unsupported-farkı normal).
     }

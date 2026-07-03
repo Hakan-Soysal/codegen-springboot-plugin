@@ -3069,8 +3069,9 @@ public final class SpringEmitter {
     // gezilir; her test owned iskelet (gen/test-java, WriteAlways) + human ARRANGE seam
     // (src/test/java, WriteIfAbsent) çifti üretir. Single-dışı (Ambiguous/Missing) prereq'li
     // testler: iskelet/seam EMİT EDİLMEZ, report.unsupported("test-prereq", ...) yazılır (T2.2
-    // kuralının emisyon yüzü). Emit edilen testler census'a GİRMEZ (report.realized("test",...)
-    // ÇAĞRILMAZ) — test construct'ı census'ta YOK, rapor kirletilmez (task §5.2 açık kararı). ──
+    // kuralının emisyon yüzü). Emit edilen (all-Single) her test report.realized("test",
+    // "{Scope}_{Name}") çağırır — .NET DotnetEmitter.cs:235 paritesi (id-şeması: Process_/
+    // OrphanFlow_/OrphanOp_), T7.1-PARITE. ──
 
     /** Ordinal-sıralı gm.operations() üzerinden opId → GmOperation index'i (test-emisyon çözümü). */
     private static Map<String, GmOperation> opIndex(GenerationModel gm) {
@@ -3085,16 +3086,16 @@ public final class SpringEmitter {
         Map<String, GmOperation> opById = opIndex(gm);
         var plan = gm.testPlan();
         for (ProcessTest t : plan.processTests()) {
-            emitOneTest("process", t.processId(), t.runSequence(), t.prerequisites(), t.writeSet(), opById, gm,
-                    writer, report);
+            emitOneTest("process", "Process", t.processId(), t.runSequence(), t.prerequisites(), t.writeSet(),
+                    opById, gm, writer, report);
         }
         for (ScenarioTest t : plan.orphanFlowTests()) {
-            emitOneTest("orphanflow_" + t.id().toLowerCase(Locale.ROOT), t.id(), t.runSequence(), t.prerequisites(),
-                    t.writeSet(), opById, gm, writer, report);
+            emitOneTest("orphanflow_" + t.id().toLowerCase(Locale.ROOT), t.scope(), t.id(), t.runSequence(),
+                    t.prerequisites(), t.writeSet(), opById, gm, writer, report);
         }
         for (ScenarioTest t : plan.orphanOpTests()) {
-            emitOneTest("orphanop_" + t.id().toLowerCase(Locale.ROOT), t.id(), t.runSequence(), t.prerequisites(),
-                    t.writeSet(), opById, gm, writer, report);
+            emitOneTest("orphanop_" + t.id().toLowerCase(Locale.ROOT), t.scope(), t.id(), t.runSequence(),
+                    t.prerequisites(), t.writeSet(), opById, gm, writer, report);
         }
     }
 
@@ -3105,11 +3106,14 @@ public final class SpringEmitter {
     /**
      * Bir test (Process/OrphanFlow/OrphanOp) için iskelet+seam çifti — ya da (Single-dışı prereq
      * varsa) hiçbiri + Unsupported("test-prereq", ...). {@code folder} paket-segmenti (lowercase,
-     * task §5.2: {@code process} sabit / {@code orphanflow_{id}}/{@code orphanop_{id}}).
+     * task §5.2: {@code process} sabit / {@code orphanflow_{id}}/{@code orphanop_{id}}). {@code
+     * censusScope} .NET {@code Scope} paritesi ("Process"/"OrphanFlow"/"OrphanOp") — emit edilen
+     * (all-Single) test report.realized("test", "{censusScope}_{testId}") çağırır (.NET
+     * DotnetEmitter.cs:235 paritesi, T7.1-PARITE).
      */
-    private static void emitOneTest(String folder, String testId, List<String> runSeq, List<PrereqStep> prereqs,
-            List<String> writeSet, Map<String, GmOperation> opById, GenerationModel gm, EmitWriter writer,
-            BuildReport report) throws IOException {
+    private static void emitOneTest(String folder, String censusScope, String testId, List<String> runSeq,
+            List<PrereqStep> prereqs, List<String> writeSet, Map<String, GmOperation> opById, GenerationModel gm,
+            EmitWriter writer, BuildReport report) throws IOException {
         boolean allSingle = true;
         for (PrereqStep p : prereqs) {
             if (p.kind() != PrereqKind.SINGLE) {
@@ -3152,6 +3156,7 @@ public final class SpringEmitter {
                 testSkeletonJava(pkg, className, arrangeClassName, steps, writeSet, gm));
         writer.writeIfAbsent("src/test/java/" + pathPrefix + "/" + arrangeClassName + ".java",
                 arrangeSeamJava(pkg, arrangeClassName, steps));
+        report.realized("test", censusScope + "_" + testId); // .NET DotnetEmitter.cs:235 paritesi (T7.1-PARITE)
     }
 
     /** Bir op'un tipli istek kaydı adı ({@code {Op}Command}/{@code {Op}Query}, T3.6 reqName paritesi). */
