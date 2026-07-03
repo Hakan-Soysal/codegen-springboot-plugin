@@ -1,0 +1,19 @@
+{
+  "task_id": "T2.4",
+  "attempt": 1,
+  "status": "DONE",
+  "worktree": "/private/tmp/claude-501/-Users-hakansoysal-Desktop-ClaudeCode-Denemeler-SpringBoot-Template/f700c184-fdb1-45e4-89de-971d3fac2909/scratchpad/wt-t2-4",
+  "branch": "t2-4-provenance",
+  "commit": "5e44d5f55537e62559952826c40661cfc165d2c4",
+  "files_changed": [
+    "gen-spring/src/main/java/techgen/spring/Provenance.java",
+    "gen-spring/src/main/java/techgen/spring/ProvenanceEntry.java",
+    "gen-spring/src/main/java/techgen/spring/ProvenanceIo.java",
+    "gen-spring/src/test/java/techgen/spring/ProvenanceIoTest.java",
+    "tasks/raporlar/T2-4.md"
+  ],
+  "test_result": "mvn -pl gen-spring -am test exit 0; gen-spring Tests run: 10, Failures: 0 (ProvenanceIoTest 9 + Placeholder 1)",
+  "dod_self_check_all_passed": true,
+  "out_of_scope_violations": [],
+  "notes": "Kapsam kararları (verifier değerlendirecek): (1) 'yalnız Generated yazılır' filtrelemesi ProvenanceIo'da YAPILMADI — referans §5 filtrelemeyi emitter'a (T3.1 EmitWriter) atfediyor; ProvenanceIo saf IO katmanı (write_onlyIncludesEntriesGivenByCaller testiyle bilerek sabitlendi). (2) sha256 hesaplama metodu eklenmedi — T3.1 spec'i hash'in EmitWriter'da hesaplanacağını söylüyor. (3) Alan adı 'clazz' (Java reserved word kaçışı) vs C# 'Class' — JSON anahtarı farklı, raporda flag'li."
+}

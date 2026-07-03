@@ -5,7 +5,7 @@
     "plan_folder": "/Users/hakansoysal/Desktop/ClaudeCode Denemeler/SpringBoot Template/tasks",
     "project_root": "/Users/hakansoysal/Desktop/ClaudeCode Denemeler/SpringBoot Template",
     "archive_root": "docs/_archive/",
-    "parallelism": "milestone-by-milestone + kullanıcı-onaylı geniş paralel paket (2026-07-03 escalations/2026-07-03T12-30-parallelism.md): T2.3||T2.4(worktree), T6.2||T6.3(worktree), T9.2||T9.3, M8||M6-M7(worktree, plan-graf sapması onaylı). M3/M4 sıralı.",
+    "parallelism": "milestone-by-milestone + kullanıcı-onaylı geniş paralel paket (escalations/2026-07-03T12-30-parallelism.md): T2.3||T2.4(worktree), T6.2||T6.3(worktree), T9.2||T9.3, M8||M6-M7(worktree, plan-graf sapması onaylı). M3/M4: pencere-bazlı PM kararı (escalations/2026-07-03T16-20-parallelism-m3m4.md) — ayrık dosya ayak izli alt-kümeler worktree ile paralel, SpringEmitter.java çakışanları sıralı, şüphede sıralı, merge sonrası ana ağaçta tam re-verify.",
     "retry_limit": 3,
     "executor_model": "sonnet (kullanıcı direktifi — kritik yol dahil)",
     "verifier_model": "opus",
@@ -14,7 +14,7 @@
   "milestones": {
     "M0": {"tasks": ["T0.1", "T0.2"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-03T11:15Z"},
     "M1": {"tasks": ["T1.1", "T1.2", "T1.3"], "status": "completed", "milestone_verdict": "PASS"},
-    "M2": {"tasks": ["T2.1", "T2.2", "T2.3", "T2.4"], "status": "in_progress", "note": "T2.1||T2.4 paralel penceresi iptal: -am reactor yarışı riski; ID sırasıyla sıralı"},
+    "M2": {"tasks": ["T2.1", "T2.2", "T2.3", "T2.4"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-03 (resume session)", "note": "T2.3||T2.4 paralel penceresi başarılı (worktree + merge 7c1e8ef); verifier-reports/M2-milestone.json"},
     "M3": {"tasks": ["T3.1", "T3.2", "T3.3", "T3.4", "T3.5", "T3.6", "T3.7"], "status": "pending"},
     "M4": {"tasks": ["T4.1", "T4.2", "T4.3", "T4.4", "T4.5"], "status": "pending"},
     "M5": {"tasks": ["T5.1"], "status": "pending"},
@@ -30,10 +30,10 @@
     "T1.1": {"tasklist_id": "3", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS"},
     "T1.2": {"tasklist_id": "4", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "note": "API kesintisi, resume ile tamamlandı"},
     "T1.3": {"tasklist_id": "5", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS"},
-    "T2.1": {"tasklist_id": "6", "status": "in_progress", "retries": 0},
+    "T2.1": {"tasklist_id": "6", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "note": "status.json yazımı checkpoint'te eksik kalmıştı; RESUME.md + commit 037bd67 ile doğrulandı (resume 2026-07-03)"},
     "T2.2": {"tasklist_id": "7", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS"},
-    "T2.3": {"tasklist_id": "8", "status": "pending", "retries": 0, "note": "SIRADAKI — T2.4 ile paralel (T2.4 worktree'de)"},
-    "T2.4": {"tasklist_id": "9", "status": "pending", "retries": 0},
+    "T2.3": {"tasklist_id": "1 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "1543b0c", "note": "gen-core 104 test; census toplam=77; verifier-reports/T2-3-attempt-1.json"},
+    "T2.4": {"tasklist_id": "2 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "5e44d5f (merge 7c1e8ef)", "note": "worktree'de doğrulandı, temiz merge, kökten re-verify 116 test exit 0; verifier-reports/T2-4-attempt-1.json"},
     "T3.1": {"tasklist_id": "10", "status": "pending", "retries": 0},
     "T3.2": {"tasklist_id": "11", "status": "pending", "retries": 0},
     "T3.3": {"tasklist_id": "12", "status": "pending", "retries": 0},
@@ -68,5 +68,8 @@
     "[SCOPE: environmental] JDK 21 sistemde YOK; Temurin 21.0.11 scratchpad'te. HER java/mvn komutundan önce: export JAVA_HOME='/private/tmp/claude-501/-Users-hakansoysal-Desktop-ClaudeCode-Denemeler-SpringBoot-Template/eb7a559a-6022-43dc-b5cd-8073348492aa/scratchpad/jdk21/jdk-21.0.11+10/Contents/Home' && export PATH=\"$JAVA_HOME/bin:$PATH\". Bu olmadan koşulan mvn/java çıktısı GEÇERSİZDİR (default JDK 23/24)."
   ],
   "escalations": [],
-  "tests_passing": null
+  "tests_passing": 83,
+  "resume_log": [
+    {"at": "2026-07-03 (resume)", "note": "Yeni session resume. Health check PASS: mvn test exit 0, 83 test (gen-core 80, gen-spring 1, gen-cli 1, conformance 1), git main==origin/main temiz. Sıradaki: T2.3(ana ağaç) ∥ T2.4(worktree)."}
+  ]
 }

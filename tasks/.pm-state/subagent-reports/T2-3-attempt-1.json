@@ -1,0 +1,28 @@
+{
+  "task_id": "T2.3",
+  "attempt": 1,
+  "status": "DONE",
+  "files_changed": [
+    "gen-core/src/main/java/techgen/core/report/BuildReport.java",
+    "gen-core/src/main/java/techgen/core/report/Completeness.java",
+    "gen-core/src/test/java/techgen/core/report/ReportTest.java",
+    "gen-core/src/test/java/techgen/core/report/CensusTest.java",
+    "tasks/raporlar/T2-3.md"
+  ],
+  "commands_run": [
+    {"cmd": "mvn -q -pl gen-core test (pre-condition)", "exit_code": 0},
+    {"cmd": "mvn -q -pl gen-core compile", "exit_code": 0},
+    {"cmd": "mvn -pl gen-core test", "exit_code": 0, "stdout_tail": "Tests run: 104, Failures: 0, Errors: 0, Skipped: 0 / BUILD SUCCESS"},
+    {"cmd": "mvn -q -pl gen-core test (final)", "exit_code": 0},
+    {"cmd": "git commit -m 'T2.3: BuildReport + Census + Completeness gate'", "exit_code": 0, "stdout_tail": "[main 1543b0c] 5 files changed, 870 insertions(+)"}
+  ],
+  "dod_self_check": [
+    {"item": "BuildReport + Census + check mevcut; javadoc'ta INV-7 referansı", "passed": true},
+    {"item": ">=14 test; census fixture assert'leri >=20 çift", "passed": true, "evidence": "24 yeni test (ReportTest 18 + CensusTest 6); 24 çift contains() assert"},
+    {"item": "6.1-6.3 koşuldu; census toplamı raporda", "passed": true, "evidence": "104/104 PASS; census toplamı=77 raporda"},
+    {"item": "git status: yalnız gen-core", "passed": true}
+  ],
+  "out_of_scope_violations": [],
+  "commit": "1543b0c",
+  "notes": "Fixture manifest.json census toplamı = 77 çift. Geçici doğrulama sınıfı /tmp'de kullanılıp silindi (kalıcı koda eklenmedi). .pm-state değişiklikleri PM'e ait, stage edilmedi."
+}
