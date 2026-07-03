@@ -30,4 +30,41 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <finalName>gen-cli</finalName>
+    <plugins>
+      <!-- e2e-etiketli testler (gerçek `java -jar` süreç koşumu) shaded jar'ın `package` fazından
+           SONRA var olmasını gerektirir; `mvn test` sırasında dışlanır (SPEC §9: ayrı CI aşaması). -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <excludedGroups>e2e</excludedGroups>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.2</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>techgen.cli.Main</mainClass>
+                </transformer>
+                <!-- Jackson (jackson-databind vb.) META-INF/services dosyaları merge edilmeli. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

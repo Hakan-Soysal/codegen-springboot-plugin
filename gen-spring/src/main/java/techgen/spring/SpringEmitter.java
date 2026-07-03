@@ -549,34 +549,49 @@ public final class SpringEmitter {
                 Versions.BUILD_HELPER_PLUGIN);
     }
 
-    /** dbProvider whitelist → provider driver bağımlılığı (SPEC §6.6). Policy detayı T5.1'de. */
+    /**
+     * dbProvider whitelist → provider driver bağımlılığı (SPEC §6.6). Whitelist içi →
+     * {@code report.realized("dbProvider", value)} (.NET {@code DotnetEmitter.cs:1606} paritesi —
+     * POLICY DEĞİL realized; {@code dbProvider} census construct'ı olmadığından bu entry gate'i
+     * etkilemez, sadece bilgilendirir). null → seam, rapor entry'si YOK. Whitelist dışı →
+     * {@code Unsupported} + seam davranışı.
+     */
     private static String providerDependencyXml(GenConfig config, BuildReport report) {
         String provider = config == null ? null : config.dbProvider();
         if (provider == null) {
             return "    <!-- dbProvider tanımlı değil: provider seam — gen.config.json'a dbProvider ekleyin -->\n";
         }
         return switch (provider) {
-            case "h2", "inmemory" -> """
+            case "h2", "inmemory" -> {
+                report.realized("dbProvider", provider);
+                yield """
                         <dependency>
                           <groupId>com.h2database</groupId>
                           <artifactId>h2</artifactId>
                           <scope>runtime</scope>
                         </dependency>
                     """;
-            case "postgres" -> """
+            }
+            case "postgres" -> {
+                report.realized("dbProvider", provider);
+                yield """
                         <dependency>
                           <groupId>org.postgresql</groupId>
                           <artifactId>postgresql</artifactId>
                           <scope>runtime</scope>
                         </dependency>
                     """;
-            case "sqlserver" -> """
+            }
+            case "sqlserver" -> {
+                report.realized("dbProvider", provider);
+                yield """
                         <dependency>
                           <groupId>com.microsoft.sqlserver</groupId>
                           <artifactId>mssql-jdbc</artifactId>
                           <scope>runtime</scope>
                         </dependency>
                     """;
+            }
             default -> {
                 report.unsupported("dbProvider", provider, "whitelist dışı; postgres/sqlserver/h2/inmemory");
                 yield "    <!-- dbProvider '" + provider + "' whitelist dışı: driver eklenmedi -->\n";
