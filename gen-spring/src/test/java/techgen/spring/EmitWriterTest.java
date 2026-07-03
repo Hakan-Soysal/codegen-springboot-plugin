@@ -28,7 +28,7 @@ class EmitWriterTest {
 
     @Test
     void writeAlways_javaFileGetsGenHeader(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
 
         writer.writeAlways("gen/java/app/Foo.java", "package app;\n");
 
@@ -39,7 +39,7 @@ class EmitWriterTest {
 
     @Test
     void writeAlways_xmlAndPomDoNotGetGenHeader(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
 
         writer.writeAlways("gen/parent/pom.xml", "<project/>\n");
         writer.writeAlways("gen/foo.xml", "<foo/>\n");
@@ -54,7 +54,7 @@ class EmitWriterTest {
 
     @Test
     void writeAlways_sameContentDoesNotTouchMtime(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
         writer.writeAlways("gen/java/app/Foo.java", "package app;\n");
         Path file = outDir.resolve("gen/java/app/Foo.java");
 
@@ -69,7 +69,7 @@ class EmitWriterTest {
 
     @Test
     void writeAlways_differentContentRewritesFile(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
         writer.writeAlways("gen/java/app/Foo.java", "package app;\n// v1\n");
 
         writer.writeAlways("gen/java/app/Foo.java", "package app;\n// v2\n");
@@ -80,7 +80,7 @@ class EmitWriterTest {
 
     @Test
     void writeIfAbsent_existingFileWithDifferentContentIsNotOverwritten(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
         Path target = outDir.resolve("src/main/java/app/Handler.java");
         Files.createDirectories(target.getParent());
         Files.writeString(target, "human-written content, farklı", StandardCharsets.UTF_8);
@@ -93,7 +93,7 @@ class EmitWriterTest {
 
     @Test
     void writeIfAbsent_missingFileIsCreated(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
 
         writer.writeIfAbsent("src/main/java/app/Handler.java", "default content\n");
 
@@ -107,7 +107,7 @@ class EmitWriterTest {
         Path newSlice = outDir.resolve("src/main/java/app/foo/FooHandler.java");
         Files.createDirectories(oldFlat.getParent());
         Files.writeString(oldFlat, "human logic body\n", StandardCharsets.UTF_8);
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
 
         writer.migrateSeamIfFlat(oldFlat, newSlice);
 
@@ -124,7 +124,7 @@ class EmitWriterTest {
         Files.writeString(oldFlat, "old body\n", StandardCharsets.UTF_8);
         Files.createDirectories(newSlice.getParent());
         Files.writeString(newSlice, "already migrated body\n", StandardCharsets.UTF_8);
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
 
         writer.migrateSeamIfFlat(oldFlat, newSlice);
 
@@ -135,11 +135,11 @@ class EmitWriterTest {
     @Test
     void prune_removesOrphanKeepsCurrentGeneratedAndHumanSeam(@TempDir Path outDir) throws IOException {
         // run1: A + B (Generated) + C (human, writeIfAbsent)
-        EmitWriter run1 = new EmitWriter(outDir);
+        EmitWriter run1 = new EmitWriter(outDir, "0.1.0-test");
         run1.writeAlways("gen/java/app/A.java", "class A {}\n");
         run1.writeAlways("gen/java/app/orphan/B.java", "class B {}\n");
         run1.writeIfAbsent("src/main/java/app/C.java", "class C { /* human */ }\n");
-        run1.finishAndPrune("0.1.0-test");
+        run1.finishAndPrune();
 
         Path a = outDir.resolve("gen/java/app/A.java");
         Path b = outDir.resolve("gen/java/app/orphan/B.java");
@@ -149,9 +149,9 @@ class EmitWriterTest {
         assertTrue(Files.exists(c));
 
         // run2: yalnız A yazılır → B orphan → silinmeli, boş "orphan" dizini silinmeli, C (human) dokunulmamalı.
-        EmitWriter run2 = new EmitWriter(outDir);
+        EmitWriter run2 = new EmitWriter(outDir, "0.1.0-test");
         run2.writeAlways("gen/java/app/A.java", "class A {}\n");
-        run2.finishAndPrune("0.1.0-test");
+        run2.finishAndPrune();
 
         assertTrue(Files.exists(a), "bu run'da yazılan A silinmemeli");
         assertFalse(Files.exists(b), "önceki run'ın Generated'ı ama bu run'da yazılmayan B silinmeli (orphan prune)");
@@ -169,9 +169,9 @@ class EmitWriterTest {
         Files.writeString(b, "class B {}\n", StandardCharsets.UTF_8);
         Files.writeString(outDir.resolve(ProvenanceIo.FILE_NAME), "{ this is not valid json ]]]", StandardCharsets.UTF_8);
 
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
         writer.writeAlways("gen/java/app/A.java", "class A {}\n");
-        writer.finishAndPrune("0.1.0-test");
+        writer.finishAndPrune();
 
         assertTrue(Files.exists(b), "bozuk provenance → prune ATLANIR, B silinmemeli");
         Provenance rewritten = ProvenanceIo.tryRead(outDir);
@@ -182,11 +182,11 @@ class EmitWriterTest {
 
     @Test
     void provenanceFile_ordinalSortedLowercaseHexShaTrailingNewline(@TempDir Path outDir) throws IOException {
-        EmitWriter writer = new EmitWriter(outDir);
+        EmitWriter writer = new EmitWriter(outDir, "0.1.0-test");
         writer.writeAlways("gen/java/app/Zeta.java", "class Zeta {}\n");
         writer.writeAlways("gen/java/app/Alpha.java", "class Alpha {}\n");
 
-        writer.finishAndPrune("0.1.0-test");
+        writer.finishAndPrune();
 
         String raw = Files.readString(outDir.resolve(ProvenanceIo.FILE_NAME), StandardCharsets.UTF_8);
         assertTrue(raw.endsWith("\n"));

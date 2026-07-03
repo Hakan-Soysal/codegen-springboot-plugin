@@ -37,10 +37,12 @@ public final class EmitWriter {
     private static final String GENERATOR = "techgen-spring";
 
     private final Path outDir;
+    private final String version;
     private final List<WrittenFile> written = new ArrayList<>();
 
-    public EmitWriter(Path outDir) {
+    public EmitWriter(Path outDir, String version) {
         this.outDir = outDir;
+        this.version = version;
     }
 
     /** Bu run'da {@link #writeAlways} ile kaydedilen (relPath, sha256) girdilerinin değişmez görünümü. */
@@ -105,12 +107,12 @@ public final class EmitWriter {
      *   <li>Önceki {@code Generated} path'lerinden bu run'da {@code written}'da OLMAYANLARI sil;
      *       {@code written} dışı hiçbir path'e dokunulmaz (human dosyaları provenance'ta zaten yok).</li>
      *   <li>Silme olduysa artık-boş dizinleri en-derin-önce sil.</li>
-     *   <li>Yeni provenance'ı ({@code generator=techgen-spring}, verilen {@code version},
-     *       {@code files=written}) yaz — {@link ProvenanceIo#write} ordinal path-sıralar ve
-     *       atomik yazar.</li>
+     *   <li>Yeni provenance'ı ({@code generator=techgen-spring}, constructor'da verilen
+     *       {@code version}, {@code files=written}) yaz — {@link ProvenanceIo#write} ordinal
+     *       path-sıralar ve atomik yazar.</li>
      * </ol>
      */
-    public void finishAndPrune(String version) throws IOException {
+    public void finishAndPrune() throws IOException {
         Provenance previous = ProvenanceIo.tryRead(outDir);
 
         boolean pruned = false;
