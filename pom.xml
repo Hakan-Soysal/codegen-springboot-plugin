@@ -20,8 +20,8 @@
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-    <jackson-bom.version>2.19.0</jackson-bom.version>
-    <junit-bom.version>5.12.2</junit-bom.version>
+    <jackson-bom.version>2.22.0</jackson-bom.version>
+    <junit-bom.version>5.14.4</junit-bom.version>
   </properties>
 
   <dependencyManagement>
