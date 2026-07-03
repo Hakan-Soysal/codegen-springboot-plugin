@@ -246,6 +246,32 @@ public final class SpringEmitter {
                     wiringBeans.append("        return new ").append(opId).append("Endpoint(h);\n");
                     wiringBeans.append("    }\n\n");
                 }
+
+                // Step 5.6 — T4.3: @trigger.{name} ext → SmartLifecycle stub (Generation Gap:
+                // {Op}{T}TriggerBase gen-owned + human seam {Op}{T}Trigger, writeIfAbsent) + Wiring
+                // EXPLICIT @Bean (referans §1 {@code {Op}.Trigger.g.cs} `:1105-1123`). realized
+                // ("@trigger.{name}", opId) T3.7 ext döngüsünde (extFields) ZATEN yapılıyor —
+                // burada TEKRARLANMAZ (rule 9: çift-entry önlenir).
+                List<ExtJson> triggers = op.op().ext() == null ? List.of()
+                        : op.op().ext().stream().filter(e -> "trigger".equals(e.ns())).toList();
+                if (!triggers.isEmpty()) {
+                    report.policy("trigger-wiring", "SmartLifecycle stub (generator-policy)");
+                    for (ExtJson t : triggers) {
+                        String triggerCls = opId + Naming.pascal(t.name()) + "Trigger";
+                        writer.writeAlways(genSliceDir + "/" + triggerCls + "Base.java",
+                                triggerBaseJava(slicePkg, opId, triggerCls, t));
+                        writer.writeIfAbsent(humanSliceDir + "/" + triggerCls + ".java",
+                                triggerLogicJava(slicePkg, opId, triggerCls));
+                        wiringImports.add("import " + slicePkg + "." + triggerCls + ";");
+                        String camelTrigger = Naming.camel(triggerCls);
+                        wiringBeans.append("    @Bean\n");
+                        wiringBeans.append("    public ").append(triggerCls).append(' ').append(camelTrigger)
+                                .append('(').append(opId).append("Handler h) {\n");
+                        wiringBeans.append("        return new ").append(triggerCls).append("(h);\n");
+                        wiringBeans.append("    }\n\n");
+                        anyBean = true;
+                    }
+                }
             }
             writer.writeAlways("gen/java/app/" + pkg + "/" + cls + ".java",
                     moduleWiring(module, wiringImports, wiringBeans.toString(), anyBean));
@@ -2103,6 +2129,71 @@ public final class SpringEmitter {
         sb.append("    public void handle(").append(eventName).append(" event) {\n");
         sb.append("        throw new UnsupportedOperationException(\"").append(cls)
                 .append(".handle: doldurulacak\");\n");
+        sb.append("    }\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    // ── Trigger (T4.3; SPEC §6.2 `{Op}.Trigger.g.cs` satırı; referans §1 `:1105-1123`/§2) —
+    // Generation Gap: gen-owned {Op}{T}TriggerBase (WriteAlways; SmartLifecycle — isRunning/stop
+    // basit state gen-owned, start() soyut) + human seam {Op}{T}Trigger (WriteIfAbsent, marker).
+    // realized("@trigger.{name}") T3.7 ExtPartial paritesinde (extFields) yapılır — burada
+    // TEKRARLANMAZ (çift-entry önlenir). ──
+
+    /**
+     * Gen-owned taban sınıf: {@code {Op}Handler} alanı + ctor; {@code SmartLifecycle}
+     * {@code isRunning}/{@code stop} basit-state gen-owned; {@code start()} soyut bildirim
+     * (gövdesi human seam'de, {@code {Op}{T}Trigger}).
+     */
+    private static String triggerBaseJava(String slicePkg, String opId, String triggerCls, ExtJson t) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        sb.append("import org.springframework.context.SmartLifecycle;\n\n");
+        sb.append("/**\n");
+        sb.append(" * @trigger.").append(t.name()).append(" -&gt; ").append(opId)
+                .append(" tetikleyici taban sınıfı (Generation Gap, gen-owned; SPEC §6.2\n");
+        sb.append(" * {@code {Op}.Trigger.g.cs} satırı). {@code start()} gövdesi human seam'de\n");
+        sb.append(" * ({@code ").append(triggerCls)
+                .append("}); {@code isRunning}/{@code stop} gen-owned basit state.\n");
+        sb.append(" */\n");
+        sb.append("public abstract class ").append(triggerCls).append("Base implements SmartLifecycle {\n\n");
+        sb.append("    protected final ").append(opId).append("Handler handler;\n");
+        sb.append("    protected volatile boolean running;\n\n");
+        sb.append("    protected ").append(triggerCls).append("Base(").append(opId).append("Handler handler) {\n");
+        sb.append("        this.handler = handler;\n");
+        sb.append("    }\n\n");
+        sb.append("    @Override\n");
+        sb.append("    public abstract void start();\n\n");
+        sb.append("    @Override\n");
+        sb.append("    public boolean isRunning() {\n");
+        sb.append("        return running;\n");
+        sb.append("    }\n\n");
+        sb.append("    @Override\n");
+        sb.append("    public void stop() {\n");
+        sb.append("        running = false;\n");
+        sb.append("    }\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Human seam ({@code {Op}{T}Trigger}, writeIfAbsent): base'i extend eder; {@code start()}
+     * gövdesi birebir marker fırlatır ({@code "{opId}{T}Trigger.start: doldurulacak"} — referans
+     * §2 boş-marker metinleri; .NET {@code "{op.Id}{T}Trigger.StartAsync: doldurulacak"} paritesi,
+     * Java hedefinde {@code SmartLifecycle.start()} senkron olduğundan {@code StartAsync}→{@code start}).
+     */
+    private static String triggerLogicJava(String slicePkg, String opId, String triggerCls) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(slicePkg).append(";\n\n");
+        sb.append("public class ").append(triggerCls).append(" extends ").append(triggerCls)
+                .append("Base {\n\n");
+        sb.append("    public ").append(triggerCls).append('(').append(opId).append("Handler handler) {\n");
+        sb.append("        super(handler);\n");
+        sb.append("    }\n\n");
+        sb.append("    @Override\n");
+        sb.append("    public void start() {\n");
+        sb.append("        throw new UnsupportedOperationException(\"").append(triggerCls)
+                .append(".start: doldurulacak\");\n");
         sb.append("    }\n");
         sb.append("}\n");
         return sb.toString();
