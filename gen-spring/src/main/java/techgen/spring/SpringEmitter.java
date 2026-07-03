@@ -13,6 +13,7 @@ import techgen.core.gm.GmOperation;
 import techgen.core.model.Abac;
 import techgen.core.model.BoundaryOpJson;
 import techgen.core.model.CallEdgeJson;
+import techgen.core.model.Deployable;
 import techgen.core.model.EntityFieldJson;
 import techgen.core.model.EntityJson;
 import techgen.core.model.ErrorJson;
@@ -98,11 +99,18 @@ public final class SpringEmitter {
             writer.writeAlways("gen/java/app/PersistenceConfig.java", persistenceConfigJava());
         }
 
+        // ── DeploymentTopology (T4.5 Step 5.2; referans §1 HostFile `:789-824`) — yalnız deployables>0.
+        // modular-monolith host: her deployable, units (modüller) TEK host process'te barındırır. ──
+        if (!gm.deployables().isEmpty()) {
+            writer.writeAlways("gen/java/app/DeploymentTopology.java", deploymentTopologyJava(gm, report));
+        }
+
         // ── Boundary externals (T4.4; SPEC §6.3 Boundary.g.cs satırı) — external başına {Ext}
         // arayüzü (gen-owned) + human {Ext}Client seam (writeIfAbsent) + (validation varsa)
         // caller-side {Ext}{Op}Validation. calls/compensate saga yorumları + policy'leri T4.5. ──
         for (ExternalJson ext : gm.externals()) {
-            writer.writeAlways("gen/java/app/boundary/" + ext.name() + ".java", boundaryFile(ext, report));
+            writer.writeAlways("gen/java/app/boundary/" + ext.name() + ".java",
+                    boundaryFile(ext, report, gm.callEdges()));
             writer.writeIfAbsent("src/main/java/app/boundary/" + ext.name() + "Client.java",
                     boundaryClientJava(ext));
             for (BoundaryOpJson b : ext.operations()) {
@@ -118,7 +126,8 @@ public final class SpringEmitter {
         // {Name}StubClient (human seam DEĞİL) + OWNED entity/type POJO'ları (JPA'ya bağlanmaz) +
         // (validation varsa) caller-side {Name}{Op}Validation. ──
         for (UnchartedJson u : gm.uncharted()) {
-            writer.writeAlways("gen/java/app/uncharted/" + u.name() + ".java", unchartedFile(u, report));
+            writer.writeAlways("gen/java/app/uncharted/" + u.name() + ".java",
+                    unchartedFile(u, report, gm.callEdges()));
             for (UnchartedEntity e : u.entities()) {
                 writer.writeAlways("gen/java/app/uncharted/" + u.name() + e.id() + ".java",
                         unchartedEntityJava(u, e, report));
@@ -140,6 +149,11 @@ public final class SpringEmitter {
         for (ModuleDecl module : gm.modules()) {
             String pkg = Naming.packageOf(module.name());
             String cls = Naming.pascal(module.name()) + "Wiring";
+
+            // ── ModulePrelude (T4.5 Step 5.4; module-ext, .NET Module.g.cs paritesi) — yalnız module.ext()>0 ──
+            if (module.ext() != null && !module.ext().isEmpty()) {
+                writer.writeAlways("gen/java/app/" + pkg + "/ModulePrelude.java", modulePreludeJava(module, report));
+            }
 
             // ── Errors katalogu (T3.3 §5.3) ──
             List<ErrorJson> moduleErrors = gm.errors().stream()
@@ -239,7 +253,17 @@ public final class SpringEmitter {
                 if (emitEndpoint) {
                     writer.writeAlways(genSliceDir + "/" + opId + "Endpoint.java",
                             endpointJava(op, slicePkg, reqName));
-                    report.realized("serving", opId + ":rest");
+                }
+                // T4.5 Step 5.3 — serving süpürmesi (dosya emisyonu kapsamından BAĞIMSIZ): rest ->
+                // realized; non-rest (grpc/queue/...) -> explicit report.unsupported (DROP DEĞİL, INV-7
+                // unsupported≠drop). Fixture'da CreateInvoice @grpc() bunun canlı örneği.
+                for (ServingJson s : op.op().serving()) {
+                    if ("rest".equals(s.protocol())) {
+                        report.realized("serving", opId + ":" + s.protocol());
+                    } else {
+                        report.unsupported("serving", opId + ":" + s.protocol(), "REST-only binding");
+                        report.policy("serving-" + s.protocol(), "unsupported: REST-only binding (generator-policy)");
+                    }
                 }
 
                 // Step 5.5 — Wiring bean kayıtları (TAM-AÇIK KAYIT, SPEC §12/4) biriktir.
@@ -671,6 +695,19 @@ public final class SpringEmitter {
                 """.formatted(pkg, beanImport, importsBlock, cls, body);
     }
 
+    /**
+     * T4.5 Step 5.4 — {@code gen/java/app/{module}/ModulePrelude.java}: module-level cross-cutting
+     * ext'ler (referans §1 {@code Module.g.cs} `:84-86` paritesi) — yalnız {@code module.ext()>0}
+     * (çağıran taraf guard'lar). Bean/DI YOK — yorum-dosyası (realizasyon = §8 policy).
+     */
+    private static String modulePreludeJava(ModuleDecl module, BuildReport report) {
+        String pkg = Naming.packageOf(module.name());
+        String extComment = typeLevelExtComment(module.ext(), module.name(), report);
+        return "package app." + pkg + ";\n\n"
+                + "// module-level cross-cutting prelude'lar (realizasyon = §8 policy).\n"
+                + extComment;
+    }
+
     // ── Operation slice (T3.6 §5.1-5.4; SPEC §6.2-6.4; referans §1 `:1466-1513`/`:1663-1685`) —
     // request record + HandlerBase (Generation Gap abstract) + human seam + Endpoint. Op-slice
     // paketi (app.{module}.{op}) her zaman modül-kök paketinden (app.{module}) FARKLIDIR — bu yüzden
@@ -797,6 +834,8 @@ public final class SpringEmitter {
         List<String> javaTypes = new ArrayList<>();
         List<String> components = new ArrayList<>();
         Set<String> customImports = new TreeSet<>();
+        // T4.5 Step 5.4 — op signature param-ext (owner "{opId}.{param}"; census addExt op.signature.params).
+        StringBuilder paramExtComments = new StringBuilder();
         for (ParamJson p : params) {
             String javaType = Naming.javaType(p.type(), p.collection());
             javaTypes.add(javaType);
@@ -805,6 +844,11 @@ public final class SpringEmitter {
                 customImports.add(custom);
             }
             components.add(javaType + " " + Naming.camel(p.name()));
+            String extLine = typeLevelExtComment(p.ext(), op.id() + "." + p.name(), report);
+            if (!extLine.isEmpty()) {
+                paramExtComments.append("// ").append(Naming.pascal(p.name())).append(": ")
+                        .append(extLine.replaceFirst("^// ", ""));
+            }
         }
         String stdImports = paramImports(javaTypes);
         String customImportsBlock = String.join("", customImports);
@@ -835,6 +879,7 @@ public final class SpringEmitter {
             sb.append('\n');
         }
         sb.append(pageComment);
+        sb.append(paramExtComments);
         sb.append("// visibility: ").append(o.visibility()).append('\n');
         if (o.note() != null) {
             sb.append("/**\n * ").append(escapeJavadoc(o.note())).append("\n */\n");
@@ -845,6 +890,9 @@ public final class SpringEmitter {
 
         report.realized("operation", op.id());
         report.realized("visibility", op.id());
+        // T4.5 Step 5.3 — visibility policy (bir kez; TreeMap dedup): exposed->route emit edilir, internal->emit edilmez.
+        report.policy("visibility",
+                "internal".equals(o.visibility()) ? "internal-no-route" : "exposed-route (generator-policy)");
         return sb.toString();
     }
 
@@ -1610,6 +1658,11 @@ public final class SpringEmitter {
         List<FieldJson> fields = type.fields() == null ? List.of() : type.fields();
         String imports = typeFieldImports(fields);
         report.realized(type.kind(), type.id());
+        // T4.5 Step 5.4 — type FIELD ext (owner "{typeId}.{field}"; census addExt type.fields).
+        StringBuilder fieldExtComments = new StringBuilder();
+        for (FieldJson f : fields) {
+            fieldExtComments.append(typeLevelExtComment(f.ext(), type.id() + "." + f.name(), report));
+        }
         String components = fields.stream()
                 .map(f -> Naming.javaType(f.type(), f.collection()) + " " + Naming.camel(f.name()))
                 .collect(Collectors.joining(", "));
@@ -1617,11 +1670,22 @@ public final class SpringEmitter {
                 + imports
                 + (imports.isEmpty() ? "" : "\n")
                 + extComment
+                + fieldExtComments
                 + "public record " + type.id() + "(" + components + ") {\n}\n";
     }
 
-    /** Ext realizasyonu YALNIZ type-seviyesinde (owner={@code typeId}); field ext T4.5 sweep'inde kalır. */
+    /**
+     * Ext passthrough → yorum + census kaydı (her annotation-site ortak; realizasyon = §8 policy;
+     * referans §1 {@code ExtComment} `:1326-1331` paritesi). {@code owner} census
+     * {@code Completeness.addExt} ile birebir: type/module/deployable→id, field/param→
+     * {@code "{ownerId}.{name}"}.
+     */
     private static String typeLevelExtComment(List<ExtJson> ext, String owner, BuildReport report) {
+        return typeLevelExtComment(ext, owner, report, "");
+    }
+
+    /** {@link #typeLevelExtComment(List, String, BuildReport)} + satır-başı girinti (entity field vb.). */
+    private static String typeLevelExtComment(List<ExtJson> ext, String owner, BuildReport report, String indent) {
         if (ext == null || ext.isEmpty()) {
             return "";
         }
@@ -1634,7 +1698,7 @@ public final class SpringEmitter {
             }
             names.append('@').append(x.ns()).append('.').append(x.name());
         }
-        return "// ext: " + names + " (realizasyon = policy)\n";
+        return indent + "// ext: " + names + " (realizasyon = policy)\n";
     }
 
     /** Field tiplerine göre gereken import satırları (deterministik sabit sıra: BigDecimal/Instant/LocalDate/Duration/List). */
@@ -1683,12 +1747,18 @@ public final class SpringEmitter {
         String pkg = Naming.packageOf(event.module());
         List<FieldJson> payload = event.payload();
         String imports = typeFieldImports(payload);
+        // T4.5 Step 5.4 — event payload FIELD ext (owner "{eventId}.{field}"; census addExt event.payload).
+        StringBuilder fieldExtComments = new StringBuilder();
+        for (FieldJson f : payload) {
+            fieldExtComments.append(typeLevelExtComment(f.ext(), event.id() + "." + f.name(), report));
+        }
         String components = payload.stream()
                 .map(f -> Naming.javaType(f.type(), f.collection()) + " " + Naming.camel(f.name()))
                 .collect(Collectors.joining(", "));
         return "package app." + pkg + ";\n\n"
                 + imports
                 + (imports.isEmpty() ? "" : "\n")
+                + fieldExtComments
                 + "public record " + event.id() + "(" + components + ") {\n}\n";
     }
 
@@ -1726,6 +1796,8 @@ public final class SpringEmitter {
         sb.append("public class ").append(entity.id()).append(" {\n\n");
 
         for (EntityFieldJson f : fields) {
+            // T4.5 Step 5.4 — entity FIELD ext (owner "{entityId}.{field}"; census addExt entity.fields).
+            sb.append(typeLevelExtComment(f.ext(), entity.id() + "." + f.name(), report, "    "));
             if (f.sourceOfTruth() != null) {
                 report.realized("sourceOfTruth", entity.id() + "." + f.name());
                 report.policy("source-of-truth", "cross-module FK reference; no navigation (generator-policy)");
@@ -2096,6 +2168,45 @@ public final class SpringEmitter {
                 """;
     }
 
+    // ── DeploymentTopology (root, T4.5 Step 5.2; deployables>0; referans §1 HostFile `:789-824`) —
+    // modular-monolith host: deployable -> tek process'te barındırılan units (modüller). Statik
+    // LinkedHashMap init (Map.of sıra GARANTİ ETMEZ — determinizm kaynak-metin/insertion sırasıyla). ──
+
+    private static String deploymentTopologyJava(GenerationModel gm, BuildReport report) {
+        report.policy("deployment-topology",
+                "modular-monolith host: units single-process co-hosted (generator-policy)");
+        StringBuilder extComments = new StringBuilder();
+        StringBuilder entries = new StringBuilder();
+        for (Deployable d : gm.deployables()) {
+            report.realized("deployable", d.name());
+            extComments.append(typeLevelExtComment(d.ext(), d.name(), report));
+            String units = d.units().stream().map(u -> "\"" + escapeJava(u) + "\"")
+                    .collect(Collectors.joining(", "));
+            entries.append("        DEPLOYABLES.put(\"").append(escapeJava(d.name())).append("\", List.of(")
+                    .append(units).append("));\n");
+        }
+        return """
+                package app;
+
+                import java.util.LinkedHashMap;
+                import java.util.List;
+                import java.util.Map;
+
+                // modular-monolith host topolojisi: deployable -> tek process'te barındırılan units (modüller).
+                // ponytail: tek host; ayrı-deploy = units'i ayrı host'a taşı (seam). Docker/orchestrator = §8 / insan.
+                %spublic final class DeploymentTopology {
+
+                    private DeploymentTopology() {
+                    }
+
+                    public static final Map<String, List<String>> DEPLOYABLES = new LinkedHashMap<>();
+
+                    static {
+                %s    }
+                }
+                """.formatted(extComments, entries);
+    }
+
     // ── EventBus (root, events>0): cross-module publish seam + altyapı stub (SPEC §6.3 satırı;
     // referans §1 `:1385-1398`). OutboxEventBus gen-owned infra stub'dur — WriteIfAbsent human-seam
     // DEĞİL; bu yüzden mesajında "doldurulacak" seam-marker alt-dizesi KULLANILMAZ (INV-S §3 karışmasın). ──
@@ -2378,9 +2489,12 @@ public final class SpringEmitter {
      * Step 5.1 — {@code gen/java/app/boundary/{Ext}.java}: {@code public interface {Ext}} — her
      * boundary-op bir metot; serving varsa metot üstü yorum. {@code realized("external", name)},
      * her op {@code realized("boundary-op", "{ext}.{op}")}, serving başına
-     * {@code realized("serving", "{ext}.{op}:{proto}")}.
+     * {@code realized("serving", "{ext}.{op}:{proto}")}. T4.5 Step 5.4 — boundary-op param-ext
+     * (owner {@code "{ext}.{op}.{param}"}). T4.5 Step 5.1 — bu external'i hedefleyen callEdge'ler
+     * ({@code to.system==ext.name && kind==external}): trailing {@code // calls:}/{@code // saga:}
+     * yorumu + {@code realized("calls"/"compensate", from)} + (compensate'li) {@code saga-orchestration-state} policy.
      */
-    private static String boundaryFile(ExternalJson ext, BuildReport report) {
+    private static String boundaryFile(ExternalJson ext, BuildReport report, List<CallEdgeJson> callEdges) {
         report.realized("external", ext.name());
         StringBuilder sb = new StringBuilder();
         sb.append("package app.boundary;\n\n");
@@ -2396,11 +2510,46 @@ public final class SpringEmitter {
                 report.realized("serving", ext.name() + "." + b.id() + ":" + s.protocol());
                 sb.append("    // serving: ").append(s.raw()).append(" — transport client sorumluluğu\n");
             }
+            for (ParamJson p : b.signature().params()) {
+                String extLine = typeLevelExtComment(p.ext(), ext.name() + "." + b.id() + "." + p.name(), report);
+                if (!extLine.isEmpty()) {
+                    sb.append("    // ").append(Naming.pascal(p.name())).append(": ")
+                            .append(extLine.replaceFirst("^// ", ""));
+                }
+            }
             String ret = Naming.javaType(b.signature().returns(), false);
             sb.append("    ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
                     .append(boundaryOpParams(b)).append(");\n\n");
         }
         sb.append("}\n");
+        sb.append(callsAndCompensateComments(ext.name(), "external", callEdges, report));
+        return sb.toString();
+    }
+
+    /**
+     * T4.5 Step 5.1 — saga süpürmesi (referans §1 {@code BoundaryFile} `:943-953`): {@code kind} +
+     * {@code to.system} eşleşen her callEdge için trailing yorum + {@code realized("calls", from)};
+     * compensate varsa AYRICA {@code realized("compensate", from)} + {@code saga-orchestration-state}
+     * policy (ters-sıra/LIFO — doldurucu playbook'u).
+     */
+    private static String callsAndCompensateComments(String systemName, String kind, List<CallEdgeJson> callEdges,
+            BuildReport report) {
+        StringBuilder sb = new StringBuilder();
+        for (CallEdgeJson ce : callEdges) {
+            if (!kind.equals(ce.kind()) || !systemName.equals(ce.to().system())) {
+                continue;
+            }
+            sb.append("\n// calls: ").append(ce.from()).append(" -> ").append(ce.to().system()).append('.')
+                    .append(ce.to().op()).append(" (").append(ce.kind()).append(")\n");
+            report.realized("calls", ce.from());
+            if (ce.compensate() != null) {
+                sb.append("// saga: compensate = ").append(ce.compensate().system()).append('.')
+                        .append(ce.compensate().op())
+                        .append(" (ters-sıra/LIFO — doldurucu playbook'u)\n");
+                report.realized("compensate", ce.from());
+                report.policy("saga-orchestration-state", "in-memory (generator-policy)");
+            }
+        }
         return sb.toString();
     }
 
@@ -2513,7 +2662,7 @@ public final class SpringEmitter {
      * boundary-op/serving alt-kayıtları (census şablonu {@link techgen.core.report.Completeness}
      * ile birebir); validation ayrı dosyada ({@link #boundaryValidationJava}).
      */
-    private static String unchartedFile(UnchartedJson u, BuildReport report) {
+    private static String unchartedFile(UnchartedJson u, BuildReport report, List<CallEdgeJson> callEdges) {
         report.realized("uncharted", u.name());
         report.policy("uncharted-realization", "call-adapter stub + owned model (generator-policy)");
         StringBuilder sb = new StringBuilder();
@@ -2535,6 +2684,14 @@ public final class SpringEmitter {
                 report.realized("serving", u.name() + "." + b.id() + ":" + s.protocol());
                 sb.append("    // serving: ").append(s.raw()).append(" — transport client sorumluluğu\n");
             }
+            // T4.5 Step 5.4 — boundary-op param-ext (owner "{u}.{op}.{param}").
+            for (ParamJson p : b.signature().params()) {
+                String extLine = typeLevelExtComment(p.ext(), u.name() + "." + b.id() + "." + p.name(), report);
+                if (!extLine.isEmpty()) {
+                    sb.append("    // ").append(Naming.pascal(p.name())).append(": ")
+                            .append(extLine.replaceFirst("^// ", ""));
+                }
+            }
             String ret = Naming.javaType(b.signature().returns(), false);
             sb.append("    ").append(ret).append(' ').append(Naming.camel(b.id())).append('(')
                     .append(boundaryOpParams(b)).append(");\n\n");
@@ -2553,6 +2710,8 @@ public final class SpringEmitter {
             sb.append("    }\n\n");
         }
         sb.append("}\n");
+        // T4.5 Step 5.1 — bu uncharted'i hedefleyen callEdge'ler (kind==uncharted): saga süpürmesi.
+        sb.append(callsAndCompensateComments(u.name(), "uncharted", callEdges, report));
         return sb.toString();
     }
 
