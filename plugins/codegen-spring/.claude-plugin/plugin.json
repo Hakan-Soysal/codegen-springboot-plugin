@@ -1,0 +1,9 @@
+{
+  "name": "codegen-spring",
+  "description": "techgen-spring üreteç+doldurucu referans paketinin LLM-doldurucu yarısı (base-springboot-rest skill, Java/Spring Boot REST). [dsl-generator] işaretiyle CommandDSL kesif'inin self-describe keşfine görünür; capability descriptor'ı (capability.json) ile eşleşir. Boş human-seam'leri (Handler/Boundary/Trigger/Consumer/Arrange) arketip-temelli in-place doldurur, build+conformance ile doğrular, bilinmeyen gap'te DUR der.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Hakan Soysal",
+    "email": "66327932+Hakan-Soysal@users.noreply.github.com"
+  }
+}
