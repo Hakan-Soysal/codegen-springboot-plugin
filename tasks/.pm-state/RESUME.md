@@ -1,8 +1,12 @@
 # RESUME — techgen-spring PM checkpoint
 
-_Yazılma: 2026-07-03 (resume session — M4 KAPANDI, M5 girişi)_
+## ✅ RUN COMPLETED — 11/11 MILESTONE PASS (M0-M10), 2026-07-04
+Proje BİTTİ. 298 test yeşil, E2E conformance PASS, üretilen app derleniyor, fixture 0 silentDrop, skill paketi paketlendi. Final özet: `.pm-state/summary.md`, `.pm-state/tasklist-final.json`. Bu TAMAMLANMIŞ bir run — YENİ RESUME TETİKLEME; yeni iş için yeni plan gerekir.
+**Bekleyen kullanıcı aksiyonları (opsiyonel):** (1) `git push origin main` — 40 lokal commit (M3-M10) push edilmedi (origin M2/05bb4d5'te); harness bu oturumda otomatik push'u reddetti. (2) PM completion-archival (.pm-state + plan → docs/_archive/2026-07-03T10-41-58Z-tasks/) — onay bekliyor. (3) Doc-fix follow-up'lar ("Known follow-up notes").
+
+---
+_Aşağısı tarihsel checkpoint (M4 girişi) — arşiv; güncel değil._
 _Run: 2026-07-03T10-41-58Z-tasks · retry=3 · executor=Sonnet · verifier=Opus_
-_Son yeşil kök test: 225 (gen-core 104 + gen-spring 119 + gen-cli 1 + conformance 1). Üretilen app 60 dosya compile exit 0, fixture 0 silentDrop._
 
 ## ⚠️ /clear SONRASI İLK ADIMLAR
 
