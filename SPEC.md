@@ -214,6 +214,11 @@ ExprBuild'in nötr AST yürüyüşü gen-core'da; **render stratejisi gen-spring
 - Karşılaştırma tip-duyarlı: **BigDecimal bağlamında** `a.compareTo(b) {op} 0` biçimi
   (`amount > 0` → `request.amount().compareTo(new BigDecimal("0")) > 0`); **String eşitliği**
   `a.equals(b)`; primitif sayısal → doğal operatörler. Tip-baskınlık: Decimal > Double > Int (birebir).
+- **Temporal (Date/DateTime) alanlar da compareTo formuna alınır** (T6.3-FIX #3): nötr `Date`→
+  `LocalDate`, `DateTime`→`Instant` (§6.4); Java'da bu tipler `>=`/`<=`/`>`/`<` operatörünü
+  DESTEKLEMEZ (derlenmez) — CoreTemplate1'de `DateTime` operatör-aşırıyüklemesiyle doğal
+  çözüldüğünden bu, .NET'ten **bilinçli render-sapması** (davranışsal parite: aynı karşılaştırma
+  semantiği, dile-özgü render — BigDecimal ile aynı gerekçe).
 - and→`&&`, or→`||`, `=`→eşitlik; her binary parantezli; distinct path sırası korunur.
 - AggNode/CallNode/DurationNode → `UnsupportedConstruct`.
 
