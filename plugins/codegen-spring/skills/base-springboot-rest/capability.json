@@ -1,0 +1,116 @@
+{
+  "id": "techgen-spring",
+  "version": "0.1.0",
+  "source": {
+    "marketplace": "Hakan-Soysal/codegen-springboot-plugin",
+    "install": "/plugin marketplace add Hakan-Soysal/codegen-springboot-plugin && /plugin install codegen-spring@codegen-spring-tools"
+  },
+  "invocation": {
+    "type": "cli",
+    "entry": "java -jar ${CLAUDE_SKILL_DIR}/techgen/gen-cli.jar",
+    "args": ["manifest", "targetDir"]
+  },
+  "capability": {
+    "languages": ["java"],
+    "architectures": ["modular-monolith", "vertical-slice"],
+    "persistence": ["postgres", "sqlserver", "h2", "inmemory"],
+    "transports": ["rest"],
+    "constructsCovered": [
+      "deployable",
+      "module",
+      "operation",
+      "entity",
+      "type",
+      "error",
+      "event",
+      "subscription",
+      "external",
+      "uncharted",
+      "boundary-op",
+      "calls",
+      "visibility",
+      "serving",
+      "roles",
+      "ownership",
+      "scopes",
+      "validation",
+      "rule",
+      "note",
+      "consistency",
+      "permit",
+      "guardRef",
+      "throws",
+      "idempotent",
+      "emits",
+      "pagination",
+      "invariant",
+      "compensate",
+      "sourceOfTruth",
+      "concurrency",
+      "ext"
+    ]
+  },
+  "emissionContract": {
+    "seamPath": [
+      "src/main/java/app/{module}/{op}/{Op}Handler.java",
+      "src/main/java/app/boundary/{Ext}Client.java",
+      "src/main/java/app/{module}/{op}/{Op}{Trigger}Trigger.java",
+      "src/main/java/app/{consumerModule}/{consumerOp}/{Event}To{Op}Consumer.java",
+      "src/test/java/app/{scope}/{Name}Arrange.java"
+    ],
+    "emptyStubMarker": "doldurulacak",
+    "ownedTree": "gen/**",
+    "humanTree": ["src/**", "pom.xml"],
+    "handlerSurfaceMap": {
+      "operation": "{Op}Handler.execute(request) : Result<T>",
+      "validation": "{Op}Guards.validation{N}",
+      "rule": "{Op}Guards.rule{N}",
+      "invariant": "{Entity}Invariants.invariant{N}",
+      "throwsFactory": "{Op}HandlerBase members",
+      "throwsCatalog": "{Op}HandlerBase members",
+      "auth": ["REQUIRED_ROLES", "REQUIRED_SCOPES", "OWNERSHIP"],
+      "idempotent": "IDEMPOTENCY_KEYS",
+      "boundary": "{Ext}Client.{op}(...)",
+      "boundaryValidation": "{Ext}{Op}Validation.validation{N}",
+      "subscription": "{Event}To{Op}Consumer.handle(event)",
+      "trigger": "{Op}{T}Trigger.start()",
+      "pagination": ["PAGINATION_STRATEGY", "DEFAULT_PAGE_SIZE"],
+      "consistency": ["CONSISTENCY_RISK", "CONSISTENCY_MODE"],
+      "resultTaxonomy": ["Success", "NotAuthenticated", "NotAuthorized", "NotValid", "NotProcessable", "ServerError"]
+    },
+    "canonicalOrder": [
+      "idempotency",
+      "authz",
+      "validation",
+      "external-input",
+      "rule",
+      "entity+invariant",
+      "persist",
+      "emit",
+      "return"
+    ],
+    "buildReportSchema": {
+      "constructs": "[{construct, id, status}] (status: realized | unsupported)",
+      "policies": "{name: decision}"
+    }
+  },
+  "gapProtocol": {
+    "compliant": true
+  },
+  "build": {
+    "command": "mvn -q -f {targetDir}/pom.xml compile",
+    "success": "exit 0"
+  },
+  "conformance": {
+    "adapter": "${CLAUDE_SKILL_DIR}/conformance",
+    "run": "java -jar ${CLAUDE_SKILL_DIR}/conformance/conformance.jar {appClasspath} {specsPath}"
+  },
+  "audit": {
+    "principle": "Bağımsız adversarial denetimden geçmeyen LLM-üretilmiş seam 'bitti' DEĞİL. (Kapı 3)",
+    "independence": "denetleyici = seam'i YAZAN ajan DEĞİL; ayrı/temiz bağlam (subagent). Yalnız seam kodu + contract/gen yüzeyini görür, filler'ın muhakemesini DEĞİL. Dosya başına × odak başına bir denetleyici.",
+    "lenses": ["integrity", "security", "performance"],
+    "method": "adversarial — kusur ARA (default: kusurlu); her bulguda mitigation'ın kod-kanıtıyla gerçekten YOK olduğunu doğrula (false-positive ele); etkiyi persisted-state geri-okuyarak gözle (HTTP status yetmez).",
+    "disposition": "bulgu seam-fixable (orkestrasyon: ordering/try-catch/bağlanmamış üye/eksik state-alanı) → düzelt + tüm loop'u yeniden koş (bounded retry). Yapısal (gen/** entity·config | manifest declaration | Code/ host) → seam DÜZELTEMEZ (improvise YASAK) → GAP → gap-protocol → upstream'e route.",
+    "pass": "üç lens'te de açık seam-fixable bulgu = 0 (yapısal GAP'ler route+rapor edilir, 'fix' SAYILMAZ). LLM-judge DEĞİL: Kapı 3 'seam doğru' demez, 'şu defect-sınıfı var/yok' der — conformance'ın (contract-fidelity) yerini ALMAZ, bilinen defect-sınıflarına EK savunma katmanıdır."
+  }
+}
