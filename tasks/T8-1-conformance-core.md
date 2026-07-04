@@ -96,7 +96,8 @@ test dosyalarında geçiyor, main kaynakta GEÇMİYOR (A3 — runner'a literal g
 - [ ] DTO + GeneratedApp + SpecRunner mevcut
 - [ ] ≥10 birim test; A3 grep denetimi yapıldı (raporda)
 - [ ] 6.1-6.3 koşuldu
-- [ ] `git status`: yalnız conformance
+- [ ] `git status`: conformance/** + (§5.1 gereği) root `pom.xml` (spring-boot-dependencies BOM
+      import / dependencyManagement) + `docs/surumler.md` (sürüm kaydı)
 
 ## 10. Self-check
 1. A3 grep denetimini gerçekten yaptım mı (main'de beklenen-değer literal'i yok)?

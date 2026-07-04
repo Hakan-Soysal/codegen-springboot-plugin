@@ -48,8 +48,10 @@ JUnit 5; 3-faz:
 // ASSERT (owned): her run sonucu Success; WriteSet'teki her entity için fixture.get(...) != null
 ```
 Abstract bağ: iskelet `{Name}Arrange` sınıfının metotlarını çağırır (tip referansı derleme bağı kurar).
-→ her emit edilen test `realized("test", name)` DEĞİL — census'ta test construct'ı YOK; rapor
-kirletilmez (parite: .NET de test'i census'a saymaz, yalnız Unsupported("test-prereq") yazar).
+→ all-Single olarak emit edilen her test `report.realized("test", "{censusScope}_{testId}")` çağırır —
+`test` construct'ı census'a SAYILIR (parite: .NET DotnetEmitter.cs:235 de `report.Realized("test",
+"{scope}_{name}")` ile test'i census'a sayar). Single-dışı prereq'li testte iskelet EMİT EDİLMEZ →
+census'a girmez, yalnız `Unsupported("test-prereq", ...)` yazılır (§5.4).
 
 ### Step 5.3 — ARRANGE seam (human)
 **File emit (writeIfAbsent):** `src/test/java/app/{scope}/{Name}Arrange.java` — her SINGLE prereq +

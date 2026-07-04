@@ -242,7 +242,10 @@ Unsupported; üretilen app compile yeşil.
   metotları gen-owned (`isRunning`/`stop` basit state), `public abstract void start();` bildirimi;
   ctor'da `{Op}Handler` alanı. Human seam `src/.../{Op}{T}Trigger.java` (WriteIfAbsent):
   `start()` gövdesi `throw new UnsupportedOperationException("{opId}{T}Trigger.start: doldurulacak");`.
-  Wiring'e bean kaydı. Policy `trigger-wiring=SmartLifecycle stub`. → `realized("@trigger.{name}", opId)`.
+  Wiring'e bean kaydı. Policy `trigger-wiring=SmartLifecycle stub`. Bu task YALNIZ
+  `policy("trigger-wiring", ...)` üretir — `@trigger.{name}` realize'ı BURADA yapılmaz; o realize
+  T3.7'nin ext-döngüsünde (ExtPartial paritesi) `realized("@{ns}.{name}", opId)` olarak yapılır
+  (.NET DotnetEmitter.cs: TriggerPartial yalnız policy üretir, Realized çağırmaz).
 **DoD:**
 - [ ] WriteAuditLog `@trigger.cron` fixture'da TriggerBase + seam üretiyor; ikinci emit seam'i EZMİYOR (test)
 - [ ] Compile yeşil; policy + realized entry'ler var

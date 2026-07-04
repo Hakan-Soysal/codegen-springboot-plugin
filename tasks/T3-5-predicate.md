@@ -45,7 +45,7 @@ FAIL → STOP + rapor.
 - and→`&&`, or→`||`; her binary parantezli; arith (+,-,*,/) Decimal bağlamında `.add/.subtract/
   .multiply/.divide` — fixture'da arith yoksa bile birim testle kanıtlanır.
 - Tip çözümü: önce `resolveType` (TypeEnv), null dönerse `ExprWalk.inferLiteralTypes` ipuçları,
-  o da yoksa Double varsay (parite: .NET aynı sıra).
+  o da yoksa Decimal (BigDecimal) varsay (parite: .NET aynı sıra).
 - AggNode/CallNode/DurationNode/op'suz binary → `UnsupportedConstruct` (yakalayan emitter
   `report.unsupported(...)` yazar — sessizlik yok).
 
