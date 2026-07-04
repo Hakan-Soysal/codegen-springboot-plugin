@@ -21,8 +21,8 @@
     "M6": {"tasks": ["T6.1", "T6.2", "T6.3", "T6.3-FIX"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04 (resume session)", "note": "Golden falsifiye-edilebilir+commit'li, ratchet boş, studyo E2E yeşil, 264 test. T6.3-FIX ile 3 latent SpringEmitter derleme bug'ı temizlendi (no-defer). verifier-reports/M6-milestone.json"},
     "M7": {"tasks": ["T7.1", "T7.1-PARITE"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "Test emisyonu: üretilen app'te test seam'leri, test-compile exit 0, Unsupported(test-prereq), golden Fixture.java. verifier-reports/M7-M8-milestone.json"},
     "M8": {"tasks": ["T8.1", "T8.2"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "Conformance runner: üretilen app'i boot edip spec'lere karşı koşan bağımsız runner; 3 acceptance, java -jar exit 2, property. merge 6be39af, 298 test. M7∥M8 worktree penceresi başarılı."},
-    "M9": {"tasks": ["T9.1", "T9.2", "T9.3"], "status": "pending"},
-    "M10": {"tasks": ["T10.1"], "status": "pending"}
+    "M9": {"tasks": ["T9.1", "T9.2", "T9.3"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "base-springboot-rest skill paketi: capability(.NET eşdeğer)+SKILL+references+evals+2 jar+plugin.json+marketplace. Pack script jar'ları yerleştiriyor. T9.2∥T9.3 git-index yarışı için sıralı. verifier-reports/T9-3-M9-milestone.json"},
+    "M10": {"tasks": ["T10.1"], "status": "in_progress", "note": "SON TASK: E2E demo script + README + SPEC sync. executor koşuyor."}
   },
   "tasks": {
     "T0.1": {"tasklist_id": "1", "status": "completed", "retries": 0, "attempts": 2, "verdict": "PASS", "note": "attempt1 BLOCKED_PRECOND jdk21 → env-fix; attempt2 DONE"},
@@ -56,9 +56,9 @@
     "T7.1-PARITE": {"tasklist_id": "27 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "47d554c", "note": "'test' census realize .NET DotnetEmitter:235 paritesi. Golden/invoice census korundu, 269 test."},
     "T8.1": {"tasklist_id": "20 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "49a876f (worktree)", "note": "Conformance core: Spec DTO/SpecRunner/GeneratedApp bootstrap. Gerçek-boot T8.2'ye ertelendi (§5.5). A3 temiz. Root pom.xml BOM additive (§5.1)."},
     "T8.2": {"tasklist_id": "21 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "6b699ec (merge 6be39af)", "note": "Property invariant + CLI + shaded jar. java -jar 2 PASS gerçek app. 2 bootstrap fix meşru (TCCL izolasyon + SmartLifecycle StartAsync paritesi). 298 test merged."},
-    "T9.1": {"tasklist_id": "29", "status": "pending", "retries": 0},
-    "T9.2": {"tasklist_id": "30", "status": "pending", "retries": 0},
-    "T9.3": {"tasklist_id": "31", "status": "pending", "retries": 0},
+    "T9.1": {"tasklist_id": "22 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "b2da1bc", "note": "capability.json + SKILL.md, .NET alan-alan eşdeğer (32 construct byte-eşit). Finding #2 (noktalı contract-op id → geçersiz test-arrange sınıf adı) GERÇEK ama erişilemez (fixture yok) + .NET-parite-tutarlı → documented follow-up. Finding #1 T9.3 marketplace sync."},
+    "T9.2": {"tasklist_id": "23 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "d631412", "note": "4 referans + evals 9/9. Mekanikler sadık, kanonik/marker tutarlı. 9. arketip (test-arrange) parite-TAMAMLAMASI (‌.NET evals'ı içeriyor ama playbook'u atlamış — Java daha eksiksiz)."},
+    "T9.3": {"tasklist_id": "24 (yeni session)", "status": "completed", "retries": 0, "attempts": 1, "verdict": "PASS", "commit": "aa2fd28", "note": "plugin.json + marketplace + pack script. Pack koştu, 2 jar java -jar usage, sync (Finding #1 kapandı). Birleşik T9.3+M9 verifier PASS."},
     "T10.1": {"tasklist_id": "32", "status": "pending", "retries": 0}
   },
   "open_observations": [

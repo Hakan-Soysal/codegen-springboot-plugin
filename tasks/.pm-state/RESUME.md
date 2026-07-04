@@ -6,17 +6,27 @@ _Son yeşil kök test: 225 (gen-core 104 + gen-spring 119 + gen-cli 1 + conforma
 
 ## ⚠️ /clear SONRASI İLK ADIMLAR
 
-1. Sağlık: Rule-7 JDK21 export ile kökten `mvn test` → exit 0 (~264 test). git HEAD son PM checkpoint (M6, d981c99).
-2. SIRADAKI: M7∥M8 penceresi KOŞUYOR. T7.1 (test emisyonu, ana ağaç — golden'ı UPDATE_GOLDEN ile BÜYÜTECEK) ∥ T8.1 (conformance, worktree t8-conformance). T8.1 PASS → T8.2 aynı worktree'de. İki kol bitince: T8 worktree integrator merge → ana ağaçta tam re-verify → M7 + M8 milestone verifier.
-3. Sonra: M9 (T9.1 → T9.2∥T9.3 aynı ağaç) → M10 (T10.1). Follow-up: T6.3-FIX 3 davranış dalı için birim testleri (studyo E2E backstop, non-blocking).
+1. Sağlık: Rule-7 JDK21 export ile kökten `mvn test` → exit 0 (~298 test: gen-core 106, gen-spring 155, gen-cli 7, conformance 30). git HEAD son PM checkpoint (M8, 31de2bc).
+2. SIRADAKI: M9 = T9.1 (skill capability.json + SKILL.md, ana ağaç, tam-format tasks/T9-1-skill.md) in_progress → sonra **T9.2∥T9.3 aynı ağaç** (onaylı paket): T9.2 (references/ + evals; build koşmaz) ∥ T9.3 (plugin.json + marketplace + pack script). İkisi de T9.1'e bağlı, farklı dosya kümeleri.
+3. Sonra: M10 (T10.1 E2E demo + README). Kalan: skill paketi doküman-ağırlıklı (kod/mvn az).
+
+## Known follow-up notes (doc-only, non-blocking)
+- **tasks/T3-5-predicate.md §5.1** 'Double varsay' → 'Decimal/BigDecimal varsay'.
+- **tasks/IMPLEMENTATION-PLAN.md T4.3 ~satır 245** 'realized(@trigger)' — retired rule 9 ile çözüldü, belge düzeltilmeli.
+- **tasks/T7-1-test-emisyonu.md §5.2** 'test'i census'a saymama YANLIŞ parite gerekçesi — T7.1-PARITE (47d554c) ile parite-restore edildi; task metni düzeltilmeli. Ayrıca T7-1.md self-check #3 ('Unsupported .NET birebir') faktüel yanlış.
+- **tasks/T8-1-conformance-core.md §9-vs-§5.1** çelişki (conformance-only vs root pom.xml/surumler.md); §5.1 kazandı, belge düzeltilmeli.
+- **T8.2 caveat:** assembled conformance.jar exit-0/1 Main-seviyesi testi yok (acceptance SpecRunner'ı doğrudan çağırıyor). Opsiyonel Main-level test.
+- **T6.3-FIX 3 davranış dalı** için birim testleri (temporal compareTo vb.) — studyo E2E backstop.
+- **gen-cli/conformance dependency-reduced-pom.xml** (maven-shade artefaktı) .gitignore'da değil.
+- **GmBuilder module-ref validasyonu** Java+‌.NET ikisinde de yok (tutarlı; cross-generator karar).
 
 ## Durum özeti
 
 | Milestone | Durum |
 |---|---|
-| M0-M6 | ✅ PASS (milestone verifier dahil; M6'da T6.3-FIX ile 3 latent SpringEmitter bug temizlendi) |
-| M7 ∥ M8 | T7.1 (main, test emisyonu) ∥ T8.1→T8.2 (worktree t8-conformance) — onaylı graf sapması |
-| M9-M10 | bekliyor |
+| M0-M8 | ✅ PASS (milestone verifier dahil; M6 T6.3-FIX 3 bug, M7 T7.1-PARITE census-parite, M8 T8.2 2 bootstrap-fix) |
+| M9 | T9.1 (main, skill capability) in_progress → T9.2∥T9.3 |
+| M10 | bekliyor |
 
 Retry-FAIL: 0 (tüm task ilk denemede PASS). T4.1'de reconcile YOK — T3.1'de bir reconcile (finishAndPrune imza) olmuştu.
 **Kritik başarı:** M4 sonunda fixture TAMAMEN 0 silentDrop — 43 farklı construct tipi realize, tam .NET paritesi. Üretilen Spring app 60 dosyayla derleniyor.
