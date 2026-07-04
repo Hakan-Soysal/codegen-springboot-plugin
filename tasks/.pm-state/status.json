@@ -22,7 +22,7 @@
     "M7": {"tasks": ["T7.1", "T7.1-PARITE"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "Test emisyonu: üretilen app'te test seam'leri, test-compile exit 0, Unsupported(test-prereq), golden Fixture.java. verifier-reports/M7-M8-milestone.json"},
     "M8": {"tasks": ["T8.1", "T8.2"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "Conformance runner: üretilen app'i boot edip spec'lere karşı koşan bağımsız runner; 3 acceptance, java -jar exit 2, property. merge 6be39af, 298 test. M7∥M8 worktree penceresi başarılı."},
     "M9": {"tasks": ["T9.1", "T9.2", "T9.3"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "base-springboot-rest skill paketi: capability(.NET eşdeğer)+SKILL+references+evals+2 jar+plugin.json+marketplace. Pack script jar'ları yerleştiriyor. T9.2∥T9.3 git-index yarışı için sıralı. verifier-reports/T9-3-M9-milestone.json"},
-    "M10": {"tasks": ["T10.1"], "status": "in_progress", "note": "SON TASK: E2E demo script + README + SPEC sync. executor koşuyor."}
+    "M10": {"tasks": ["T10.1"], "status": "completed", "milestone_verdict": "PASS", "verified_at": "2026-07-04", "note": "PROJE TAMAM. e2e-demo.sh exit 0 conformance PASS (verifier koştu, gerçek uçtan-uca), README, SPEC §6.5 temporal sync. 298 test, M0→M10 tam. verifier-reports/T10-1-M10-milestone.json"}
   },
   "tasks": {
     "T0.1": {"tasklist_id": "1", "status": "completed", "retries": 0, "attempts": 2, "verdict": "PASS", "note": "attempt1 BLOCKED_PRECOND jdk21 → env-fix; attempt2 DONE"},
@@ -74,7 +74,8 @@
     "[RETIRED 2026-07-03 after M4 close] (eski scaffolding) M4 ctor-threading repos→idempotent→events→boundary + cross-site ctor-SIRA assert. M4 5 task'ı boyunca uygulandı (T4.1 kurdu, T4.2/T4.4 genişletti, T4.3/T4.5 dokunmadı); final HandlerBase ctor sırası [invoiceRepository, idempotencyStore, eventBus, paymentGateway]. M4 kapandı, yeni HandlerBase dep'i planlanmıyor. Arşiv; yeni prompt'lara TAŞINMAZ."
   ],
   "escalations": [],
-  "tests_passing": 83,
+  "run_status": "COMPLETED — 11/11 milestone PASS (M0-M10), 2026-07-04",
+  "tests_passing": 298,
   "resume_log": [
     {"at": "2026-07-03 (resume)", "note": "Yeni session resume. Health check PASS: mvn test exit 0, 83 test (gen-core 80, gen-spring 1, gen-cli 1, conformance 1), git main==origin/main temiz. Sıradaki: T2.3(ana ağaç) ∥ T2.4(worktree)."}
   ]

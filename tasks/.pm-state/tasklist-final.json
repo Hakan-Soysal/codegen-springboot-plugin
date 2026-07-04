@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-07-03T10-41-58Z-tasks",
+  "run_status": "COMPLETED — 11/11 milestone PASS",
+  "serialized_from": "status.json (harness TaskList uzun oturum sonrası temizlendi)",
+  "serialized_at": "2026-07-04",
+  "milestones": {
+    "M0": "PASS (T0.1, T0.2)",
+    "M1": "PASS (T1.1, T1.2, T1.3)",
+    "M2": "PASS (T2.1, T2.2, T2.3, T2.4) — T2.3∥T2.4 worktree",
+    "M3": "PASS (T3.1-T3.7) — T3.1 reconcile 1bc1221",
+    "M4": "PASS (T4.1-T4.5) — ctor-SIRA rule retire",
+    "M5": "PASS (T5.1) — CLI+shaded jar",
+    "M6": "PASS (T6.1, T6.2, T6.3, T6.3-FIX) — 3 studyo compile bug fix",
+    "M7": "PASS (T7.1, T7.1-PARITE) — census-parite restore",
+    "M8": "PASS (T8.1, T8.2) — 2 bootstrap fix; worktree",
+    "M9": "PASS (T9.1, T9.2, T9.3) — skill paketi",
+    "M10": "PASS (T10.1) — E2E demo conformance PASS"
+  },
+  "tasks": {
+    "T2.3":"PASS 1543b0c","T2.4":"PASS 5e44d5f/7c1e8ef","T3.1":"PASS 3e9e9c9+1bc1221","T3.2":"PASS bf0fd93","T3.3":"PASS 5ff6a6a","T3.4":"PASS 52310b2","T3.5":"PASS fec500b(attempt2)","T3.6":"PASS 3d5550c","T3.7":"PASS 9d836ca","T4.1":"PASS f0b798d","T4.2":"PASS 5177ceb","T4.3":"PASS dd22844","T4.4":"PASS 4d8efeab","T4.5":"PASS ffefe39","T5.1":"PASS f20e61f","T6.1":"PASS 13b83e1","T6.2":"PASS d608549","T6.3":"PASS 25a2edc/b2ba38c","T6.3-FIX":"PASS 00786dd (plan-dışı)","T7.1":"PASS 8b67948 (INCONSISTENT-non-blocking→parite-fix)","T7.1-PARITE":"PASS 47d554c (plan-dışı)","T8.1":"PASS 49a876f","T8.2":"PASS 6b699ec/6be39af","T9.1":"PASS b2da1bc","T9.2":"PASS d631412","T9.3":"PASS aa2fd28","T10.1":"PASS 40877b3",
+    "T0.1":"PASS (attempt2, JDK21)","T0.2":"PASS","T1.1":"PASS","T1.2":"PASS","T1.3":"PASS","T2.1":"PASS 037bd67","T2.2":"PASS 0f9f311"
+  },
+  "final_tests": "298 (gen-core 106, gen-spring 155, gen-cli 7, conformance 30), 0 fail",
+  "retry_fail_count": 0,
+  "escalations": 5,
+  "out_of_plan_bugfixes": ["T6.3-FIX (3 studyo compile bug)", "T7.1-PARITE (census parite)", "T8.2-içi 2 bootstrap fix"]
+}
